@@ -6,21 +6,62 @@ export type Tier = 'haiku' | 'sonnet' | 'opus';
 export type Effort = 'low' | 'medium' | 'high';
 export type Verdict = 'on-track' | 'drifting' | 'blocked' | 'pivot';
 
-export type LogKind =
+export type EventType =
   | 'create'
-  | 'task'
-  | 'phase'
-  | 'revise'
+  | 'add' // task added
+  | 'remove' // task or phase removed
+  | 'edit' // title/goal/objective edited without a recorded reason
+  | 'phase-add'
+  | 'phase' // phase completed / activated
+  | 'start'
+  | 'done'
+  | 'block'
+  | 'unblock'
+  | 'pause'
+  | 'skip'
+  | 'reopen'
+  | 'defer'
+  | 'revise' // reasoned change → new plan version
+  | 'commit' // plan version snapshot (auto v1 or manual /commit)
   | 'note'
-  | 'session'
+  | 'session-start'
+  | 'session-end'
+  | 'checkpoint'
   | 'compact'
-  | 'checkpoint';
+  | 'legacy'; // free-text entries migrated from older versions
 
+export interface DiffLine {
+  sign: '+' | '-' | '~' | ' ' | '!';
+  num?: number;
+  text: string;
+  note?: string;
+}
+
+/** One entry of the Execution Log. `text` is always a readable one-line summary. */
 export interface LogEntry {
   id: string;
   at: number;
-  kind: LogKind;
+  type: EventType;
   text: string;
+  taskId?: string;
+  title?: string; // task / phase title at the time of the event
+  phaseId?: string;
+  runId?: string; // focus session this happened in
+  reason?: string;
+  detail?: string;
+  diff?: DiffLine[];
+  version?: number;
+  durMs?: number;
+  tokens?: number;
+}
+
+/** A snapshot of the plan structure — the "commit" a Plan Diff compares against. */
+export interface PlanVersion {
+  v: number;
+  at: number;
+  message: string;
+  phases: { id: string; title: string; goal: string; due?: string }[];
+  tasks: { id: string; title: string; phaseId: string | null }[];
 }
 
 export interface Task {
@@ -38,6 +79,8 @@ export interface Phase {
   title: string;
   goal: string;
   status: PhaseStatus;
+  due?: string; // optional target date, YYYY-MM-DD
+  doneAt?: number;
 }
 
 interface WorkspaceBase {
@@ -54,6 +97,7 @@ export interface Plan extends WorkspaceBase {
   objective: string;
   phases: Phase[];
   tasks: Task[];
+  versions: PlanVersion[];
 }
 
 export interface Checkpoint {

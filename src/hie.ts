@@ -89,3 +89,25 @@ export function runSegmentsTokens(state: Pick<AppState, 'sessions'>, runId: stri
 export function runStartedAt(state: Pick<AppState, 'sessions'>, runId: string): number {
   return Math.min(...state.sessions.filter((s) => s.runId === runId).map((s) => s.startedAt));
 }
+
+/** Milliseconds between two timestamps that fall inside focus sessions. */
+export function focusedMsBetween(state: Pick<AppState, 'sessions'>, from: number, to: number): number {
+  let sum = 0;
+  for (const s of state.sessions) {
+    const a = Math.max(from, s.startedAt);
+    const b = Math.min(to, s.endedAt ?? to);
+    if (b > a) sum += b - a;
+  }
+  return sum;
+}
+
+/** HIE tokens spent between two timestamps (overlap with focus sessions). */
+export function tokensBetween(state: Pick<AppState, 'sessions'>, from: number, to: number): number {
+  let sum = 0;
+  for (const s of state.sessions) {
+    const a = Math.max(from, s.startedAt);
+    const b = Math.min(to, s.endedAt ?? to);
+    if (b > a) sum += ((b - a) / 60_000) * ratePerMin(s.tier, s.effort);
+  }
+  return Math.round(sum);
+}

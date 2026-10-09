@@ -9,8 +9,9 @@ import type { AppState, Workspace } from './types';
 import { fmtAgo, fmtDate } from './util';
 import { seedDemo } from './demo';
 import { DialogHost } from './components/Dialogs';
-import { PlanView } from './components/PlanView';
-import { GoalView } from './components/GoalView';
+import { WsHead } from './components/WsHead';
+import { Transcript } from './components/Transcript';
+import { Dock } from './components/Dock';
 import { Header } from './components/Header';
 import { Bottom, type PromptHandle } from './components/Bottom';
 import { Welcome } from './components/Welcome';
@@ -29,6 +30,8 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
   const [output, setOutput] = useState<Output | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [loadErr, setLoadErr] = useState(loadError);
+  const [diffView, setDiffView] = useState<{ planId: string; v?: number; at: number } | null>(null);
+  const mainRef = useRef<HTMLElement>(null);
   const promptRef = useRef<PromptHandle>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -90,7 +93,8 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
 
   const focusPrompt = useCallback((prefill?: string) => promptRef.current?.focus(prefill), []);
 
-  const cmdCtx: CmdCtx = useMemo(() => ({ store, open: setDialog, exportData, importData }), [store, exportData, importData]);
+  const showDiff = useCallback((planId: string, v?: number) => setDiffView({ planId, v, at: Date.now() }), []);
+  const cmdCtx: CmdCtx = useMemo(() => ({ store, open: setDialog, exportData, importData, showDiff }), [store, exportData, importData, showDiff]);
 
   const run = useCallback(
     (input: string) => {
@@ -110,6 +114,20 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
   useEffect(() => {
     if (sel && !ordered.some((t) => t.id === sel)) setSel(null);
   }, [ws?.id, ordered.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep the transcript pinned to the newest event, like a terminal.
+  const lastWs = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const el = mainRef.current;
+    if (!el) return;
+    const switched = lastWs.current !== ws?.id;
+    lastWs.current = ws?.id;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 240;
+    if (switched || nearBottom) el.scrollTop = el.scrollHeight;
+  }, [ws?.id, ws?.log.length]);
+  useEffect(() => {
+    if (diffView) requestAnimationFrame(() => document.getElementById('plan-diff')?.scrollIntoView({ block: 'nearest' }));
+  }, [diffView]);
 
   // Scroll selected task into view.
   useEffect(() => {
@@ -160,7 +178,7 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
       }
       if (isTyping(document.activeElement) || e.metaKey || e.ctrlKey || e.altKey) return;
       // Navigate over what is actually on screen (collapsed items are skipped).
-      const visibleIds = Array.from(document.querySelectorAll<HTMLElement>('.main [data-task-id]')).map((el) => el.dataset.taskId!);
+      const visibleIds = Array.from(document.querySelectorAll<HTMLElement>('.app [data-task-id]')).map((el) => el.dataset.taskId!);
       const visible = visibleIds.map((id) => ordered.find((t) => t.id === id)).filter((t): t is NonNullable<typeof t> => !!t);
       const idx = sel ? visible.findIndex((t) => t.id === sel) : -1;
       const cur = idx >= 0 ? visible[idx] : undefined;
@@ -217,7 +235,7 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
   return (
     <Ctx.Provider value={ctx}>
       <div className="app">
-        <main className="main">
+        <main className="main" ref={mainRef}>
           <Header />
           {loadErr && (
             <div className="notice err" role="alert">
@@ -244,10 +262,11 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
           )}
           {!ws ? (
             <Welcome mode={state.ui.mode} onDemo={() => act('载入示例', (d) => void seedDemo(d))} />
-          ) : ws.kind === 'plan' ? (
-            <PlanView plan={ws} selTaskId={sel} setSel={setSel} />
           ) : (
-            <GoalView goal={ws} selTaskId={sel} setSel={setSel} />
+            <>
+              <WsHead ws={ws} sel={sel} setSel={setSel} onDiff={() => ws.kind === 'plan' && showDiff(ws.id)} />
+              <Transcript ws={ws} diff={diffView} onCloseDiff={() => setDiffView(null)} onDiff={(v) => ws.kind === 'plan' && showDiff(ws.id, v)} />
+            </>
           )}
         </main>
         <Bottom
@@ -262,6 +281,7 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
           budgetLevel={budgetLevel(used, state.settings.dailyBudget)}
           used={used}
           advice={ws ? advice : null}
+          dock={ws ? <Dock ws={ws} sel={sel} setSel={setSel} /> : null}
         />
         <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={onFile} />
         {dialog && <DialogHost key={JSON.stringify({ ...dialog, onConfirm: undefined })} dialog={dialog} />}

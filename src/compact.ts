@@ -2,12 +2,13 @@
 import type { AppState, Goal, Plan, Workspace } from './types';
 import { activeSession, sessionTokens, TIERS } from './hie';
 import { checkpointDue, currentPhase, nextCheckpointAt, orderedTasks } from './ops';
+import { diffPlan, diffSummary } from './diff';
 import { fmtDate, fmtTime, startOfDay } from './util';
 
 export function generateCompact(state: AppState, ws: Workspace, now = Date.now()): string {
   const lines = ws.kind === 'plan' ? planLines(ws) : goalLines(ws, now);
   lines.push('', ...sessionLines(state, ws, now));
-  const recent = ws.log.filter((l) => l.kind !== 'compact').slice(-5);
+  const recent = ws.log.filter((l) => !['compact', 'session-start', 'session-end'].includes(l.type)).slice(-5);
   if (recent.length) {
     lines.push('', '## 最近动态');
     for (const l of recent) lines.push(`- ${fmtTime(l.at)} ${l.text}`);
@@ -43,7 +44,12 @@ function planLines(p: Plan): string[] {
   out.push('', '## 下一步');
   if (next.length) for (const t of next) out.push(`- #${tasks.indexOf(t) + 1} ${t.title}`);
   else out.push('- 待办已清空：考虑完成阶段或补充任务');
-  const lastRevise = [...p.log].reverse().find((l) => l.kind === 'revise');
+  const pd = diffPlan(p);
+  if (pd) {
+    const sum = diffSummary(pd);
+    out.push('', `相对 v${pd.base.v}（${fmtDate(pd.base.at)}）：${sum ?? '与计划一致'}${pd.firstDrift ? ` · 首次偏离 ${fmtDate(pd.firstDrift.at)}${pd.firstDriftPhase ? `「${pd.firstDriftPhase}」` : ''}` : ''}`);
+  }
+  const lastRevise = [...p.log].reverse().find((l) => l.type === 'revise');
   if (lastRevise) out.push('', `最近一次修正：${lastRevise.text}`);
   return out;
 }

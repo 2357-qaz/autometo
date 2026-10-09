@@ -10,6 +10,7 @@ export interface CmdCtx {
   open: (d: Dialog) => void;
   exportData: () => void;
   importData: () => void;
+  showDiff: (planId: string, version?: number) => void;
 }
 
 export interface CmdResult {
@@ -89,6 +90,15 @@ export const COMMANDS: Command[] = [
       return mut(c, '标记阻塞', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), m ? m[1] : '').id, 'blocked', m ? m[2] : a));
     },
   },
+  {
+    name: 'defer',
+    args: '[#n] [原因]',
+    desc: '延期任务：推到下一阶段（Goal 中移到末尾）',
+    run: (a, c) => {
+      const m = a.trim().match(/^#?(\d+)\s*(.*)$/);
+      return mut(c, '延期', (d) => ops.deferTask(d, ops.resolveTask(ops.requireWs(d), m ? m[1] : '').id, m ? m[2] : a));
+    },
+  },
   { name: 'skip', args: '[#n]', desc: '跳过任务', run: (a, c) => mut(c, '跳过任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a).id, 'skipped')) },
   {
     name: 'phase',
@@ -105,6 +115,39 @@ export const COMMANDS: Command[] = [
         });
       }
       return mut(c, '新增阶段', (d) => ops.addPhase(d, a));
+    },
+  },
+  {
+    name: 'due',
+    args: '<YYYY-MM-DD | MM-DD | +3d | ->',
+    desc: '设置当前阶段的目标日期（- 清除）',
+    mode: 'plan',
+    run: (a, c) =>
+      mut(c, '设置目标日期', (d) => {
+        const ph = ops.currentPhase(ops.requirePlan(d)) ?? (() => { throw new ops.UserError('没有阶段'); })();
+        return ops.updatePhase(d, ph.id, { due: a.trim() === '-' ? null : a.trim() || (() => { throw new ops.UserError('用法：/due 10-20 或 /due +3d，/due - 清除'); })() });
+      }),
+  },
+  {
+    name: 'commit',
+    args: '[说明]',
+    desc: '把当前计划提交为新版本（Plan Diff 的对比点）',
+    mode: 'plan',
+    run: (a, c) => mut(c, 'Commit', (d) => ops.commitPlan(d, a)),
+  },
+  {
+    name: 'diff',
+    args: '[v版本]',
+    desc: 'Plan Diff：对比计划版本（默认 v1）和实际执行',
+    mode: 'plan',
+    run: (a, c) => {
+      const p = activePlan(c.store.get());
+      if (!p) return { text: '当前没有 Plan', error: true };
+      if (!p.versions.length) return { text: '还没有计划版本。第一次开始任务（/start）时会自动建立基准 v1，也可以 /commit', error: true };
+      const v = a.trim() ? Number(a.trim().replace(/^v/i, '')) : undefined;
+      if (v != null && !p.versions.some((x) => x.v === v)) return { text: `没有版本 v${a.trim()}。现有：${p.versions.map((x) => 'v' + x.v).join(' ')}`, error: true };
+      c.showDiff(p.id, v);
+      return ok(`Plan Diff · v${v ?? p.versions[0].v} → 现在`, false);
     },
   },
   {

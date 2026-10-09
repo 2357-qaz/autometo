@@ -49,7 +49,8 @@ export const Bottom = forwardRef<PromptHandle, {
   budgetLevel: BudgetLevel;
   used: number;
   advice: string | null;
-}>(function Bottom({ output, onRun, onUndo, onToggleMode, budgetLevel, used, advice }, ref) {
+  dock: React.ReactNode;
+}>(function Bottom({ output, onRun, onUndo, onToggleMode, budgetLevel, used, advice, dock }, ref) {
   const { state, store, open } = useApp();
   const [v, setV] = useState('');
   const [sugIdx, setSugIdx] = useState(0);
@@ -161,7 +162,6 @@ export const Bottom = forwardRef<PromptHandle, {
 
   return (
     <footer className="bottom">
-      <SpinnerLine />
       {output && (
         <div className={`output ${output.error ? 'err' : ''}`} role="status" aria-live="polite">
           <span className={output.error ? 'red' : 'green'}>⏺</span>
@@ -177,6 +177,8 @@ export const Bottom = forwardRef<PromptHandle, {
           </span>
         </div>
       )}
+      <SpinnerLine />
+      {dock}
       <div className="prompt-wrap">
         {showSugs && (
           <div className="suggest" role="listbox" aria-label="命令补全">

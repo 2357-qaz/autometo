@@ -17,12 +17,25 @@ npm run build      # 产物在 dist/，纯静态，可直接部署
 
 ## 界面
 
-单栏、终端式，只突出两件事：
+借用 Claude Code 的对话结构：
 
-1. **当前任务**（顶部高亮块）——正在做什么、做完之后是什么，以及「完成并继续 / 专注 / 卡住了」。Goal 模式下是「下一步」。
-2. **接下来的 Todo**——当前阶段的待办；后续阶段变暗显示，已完成项折叠成一行。
+| Claude Code | AuTomeDo |
+|---|---|
+| 一轮对话 | 一次专注 Session |
+| 用户消息 `>` | Session 的意图 |
+| 工具调用 `⏺ Read(…)` | 执行事件 `⏺ Start(…)` `⏺ Done(…)` `⏺ Block(…)` `⏺ Defer(…)` |
+| `⏺ Update(file)` + 内联 diff | `⏺ Write/Update(Plan)` + 计划变更 diff |
+| token 计数 | HIE 投入（专注时长 / tokens） |
+| spinner 下的 Todo 列表 | 输入框上方的当前任务 + 接下来的 Todo |
 
-阶段管理、日志、Checkpoint 历史、目标详情都收在底部的折叠区里。Plan/Goal 列表用 `o`（或点标题）打开；HIE 档位、强度、预算和疲劳都在底部状态行。
+主区域就是 **Execution Log**：按天分隔、按 Session 分组，早先的 Session 折叠成一行。顶部只有一行进度与「相对 v1：+2 −1 ~2」，任务 / 阶段 / 版本收在标签里。
+
+## Execution Log 与 Plan Diff
+
+- 每次开始、完成、阻塞、解除阻塞、跳过、延期（`/defer`）、新增、删除、修改、修正（`/revise`）都记录为结构化事件，并关联到当时的专注 Session；「完成」事件带专注用时与 tokens。
+- **计划版本**：第一次开始任务时自动生成基准 **v1**；每次 `/revise`（必须写原因）或 `/commit` 生成新版本。
+- **`/diff [v]`**：像 git diff 一样对比某个版本和实际执行——`+` 新增、`-` 移除/跳过、`~` 修改/移动、`!` 逾期/阻塞/延期，并指出**首次偏离**发生在哪一天、哪个阶段。
+- 阶段可设可选的目标日期（`/due 10-20`、`/due +3d`），用于判断逾期。
 
 ## 两种模式（Shift+Tab 切换）
 
@@ -64,6 +77,7 @@ src/
   ops.ts        纯领域操作（计划/阶段/任务/目标/Checkpoint/Session）
   hie.ts        Human Inference Engine 计算
   compact.ts    规则生成快照
+  diff.ts       Plan Diff：版本 vs 实际执行、首次偏离
   commands.ts   斜杠命令注册与解析
   components/   终端风格 UI
 tests/          核心逻辑单测

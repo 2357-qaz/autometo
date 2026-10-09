@@ -1,7 +1,8 @@
 // Pure domain operations. Each mutates a draft AppState and returns a short
-// human-readable result line. User errors are thrown as Error.
-import type { AppState, Checkpoint, Effort, Goal, LogKind, Plan, Session, Task, TaskStatus, Tier, Workspace } from './types';
-import { activeSession, sessionTokens, TIERS } from './hie';
+// human-readable result line. User errors are thrown as UserError.
+// Every meaningful change emits a structured event into the workspace's Execution Log.
+import type { AppState, Checkpoint, DiffLine, Effort, Goal, LogEntry, Plan, PlanVersion, Session, Task, TaskStatus, Tier, Workspace } from './types';
+import { activeSession, focusedMsBetween, sessionTokens, tokensBetween, TIERS } from './hie';
 import { activeGoal, activePlan, currentWs, findWs } from './store';
 import { DAY, uid } from './util';
 
@@ -10,10 +11,16 @@ const fail = (msg: string): never => {
   throw new UserError(msg);
 };
 
-export function log(ws: Workspace, kind: LogKind, text: string, now = Date.now()) {
-  ws.log.push({ id: uid(), at: now, kind, text });
-  if (ws.log.length > 500) ws.log.splice(0, ws.log.length - 500);
-  ws.updatedAt = now;
+const LOG_LIMIT = 2000;
+
+/** Append an event to a workspace log, tagging it with the running focus session. */
+export function emit(d: AppState, ws: Workspace, ev: Omit<LogEntry, 'id' | 'at'> & { at?: number }): LogEntry {
+  const s = activeSession(d);
+  const e: LogEntry = { id: uid(), at: ev.at ?? Date.now(), ...ev, runId: ev.runId ?? (s && s.wsId === ws.id ? s.runId : undefined) };
+  ws.log.push(e);
+  if (ws.log.length > LOG_LIMIT) ws.log.splice(0, ws.log.length - LOG_LIMIT);
+  ws.updatedAt = e.at;
+  return e;
 }
 
 // ───────────────────────── workspaces ─────────────────────────
@@ -29,12 +36,13 @@ export function createPlan(d: AppState, title: string, objective = ''): Plan {
     status: 'active',
     phases: [{ id: uid(), title: 'Phase 1', goal: '', status: 'active' }],
     tasks: [],
+    versions: [],
     log: [],
     createdAt: now,
     updatedAt: now,
   };
-  log(p, 'create', `创建计划「${t}」`, now);
   d.plans.unshift(p);
+  emit(d, p, { type: 'create', text: `创建计划「${t}」`, title: t });
   d.ui.mode = 'plan';
   d.ui.activePlanId = p.id;
   return p;
@@ -58,8 +66,8 @@ export function createGoal(d: AppState, title: string, opts: Partial<Pick<Goal, 
     createdAt: now,
     updatedAt: now,
   };
-  log(g, 'create', `设定目标「${t}」`, now);
   d.goals.unshift(g);
+  emit(d, g, { type: 'create', text: `设定目标「${t}」`, title: t });
   d.ui.mode = 'goal';
   d.ui.activeGoalId = g.id;
   return g;
@@ -89,7 +97,8 @@ export function deleteWs(d: AppState, id: string): string {
 export function renameWs(d: AppState, id: string, title: string): string {
   const ws = findWs(d, id) ?? fail('找不到该 Plan/Goal');
   const t = title.trim() || fail('标题不能为空');
-  log(ws, 'note', `重命名：「${ws.title}」→「${t}」`);
+  if (t === ws.title) return '标题未变化';
+  emit(d, ws, { type: 'edit', text: `重命名：「${ws.title}」→「${t}」`, diff: [{ sign: '~', text: `标题  ${ws.title} → ${t}` }] });
   ws.title = t;
   return `已重命名为「${t}」`;
 }
@@ -97,7 +106,7 @@ export function renameWs(d: AppState, id: string, title: string): string {
 export function setWsStatus(d: AppState, id: string, status: Workspace['status']): string {
   const ws = findWs(d, id) ?? fail('找不到该 Plan/Goal');
   ws.status = status;
-  log(ws, 'note', `状态 → ${status}`);
+  emit(d, ws, { type: 'note', text: `状态 → ${status}` });
   return `「${ws.title}」状态 → ${status}`;
 }
 
@@ -110,12 +119,46 @@ export function requireGoal(d: AppState): Goal {
 export function requireWs(d: AppState): Workspace {
   return currentWs(d) ?? fail('当前没有打开的 Plan/Goal');
 }
+export function requireWsSafe(d: AppState): Workspace | undefined {
+  return currentWs(d);
+}
 
 export function addNote(d: AppState, text: string): string {
   const ws = requireWs(d);
   const t = text.trim() || fail('记录内容为空');
-  log(ws, 'note', t);
-  return `已记录到「${ws.title}」日志`;
+  emit(d, ws, { type: 'note', text: t });
+  return `已记录到「${ws.title}」`;
+}
+
+// ───────────────────────── plan versions ─────────────────────────
+
+export function snapshot(p: Plan, v: number, message: string, at = Date.now()): PlanVersion {
+  return {
+    v,
+    at,
+    message,
+    phases: p.phases.map(({ id, title, goal, due }) => ({ id, title, goal, due })),
+    tasks: p.tasks.filter((t) => t.status !== 'skipped').map(({ id, title, phaseId }) => ({ id, title, phaseId })),
+  };
+}
+
+export function baseline(p: Plan): PlanVersion | undefined {
+  return p.versions[0];
+}
+
+function pushVersion(p: Plan, message: string): PlanVersion {
+  const ver = snapshot(p, (p.versions[p.versions.length - 1]?.v ?? 0) + 1, message);
+  p.versions.push(ver);
+  return ver;
+}
+
+/** Manual /commit, or the automatic v1 baseline on first start. */
+export function commitPlan(d: AppState, message: string, auto = false): string {
+  const p = requirePlan(d);
+  const m = message.trim() || (auto ? '基准：首次开始执行' : '手动提交');
+  const ver = pushVersion(p, m);
+  emit(d, p, { type: 'commit', version: ver.v, text: `Commit v${ver.v} · ${m}`, detail: m });
+  return `已提交计划版本 v${ver.v}`;
 }
 
 // ───────────────────────── plan: phases ─────────────────────────
@@ -128,18 +171,56 @@ export function addPhase(d: AppState, title: string, goal = ''): string {
   const p = requirePlan(d);
   const t = title.trim() || `Phase ${p.phases.length + 1}`;
   const hasActive = p.phases.some((ph) => ph.status === 'active');
-  p.phases.push({ id: uid(), title: t, goal: goal.trim(), status: hasActive ? 'pending' : 'active' });
-  log(p, 'phase', `新增阶段「${t}」`);
+  const ph = { id: uid(), title: t, goal: goal.trim(), status: hasActive ? ('pending' as const) : ('active' as const) };
+  p.phases.push(ph);
+  emit(d, p, { type: 'phase-add', phaseId: ph.id, title: t, text: `新增阶段「${t}」`, diff: [{ sign: '+', text: `## ${t}`, note: ph.goal || undefined }] });
   return `新增阶段「${t}」`;
 }
 
-export function updatePhase(d: AppState, phaseId: string, patch: { title?: string; goal?: string }): string {
+export function updatePhase(d: AppState, phaseId: string, patch: { title?: string; goal?: string; due?: string | null }): string {
   const p = requirePlan(d);
   const ph = p.phases.find((x) => x.id === phaseId) ?? fail('找不到阶段');
-  if (patch.title != null) ph.title = patch.title.trim() || ph.title;
-  if (patch.goal != null) ph.goal = patch.goal.trim();
-  p.updatedAt = Date.now();
+  const diff: DiffLine[] = [];
+  if (patch.title != null && patch.title.trim() && patch.title.trim() !== ph.title) {
+    diff.push({ sign: '~', text: `阶段  ${ph.title} → ${patch.title.trim()}` });
+    ph.title = patch.title.trim();
+  }
+  if (patch.goal != null && patch.goal.trim() !== ph.goal) {
+    diff.push({ sign: '~', text: `「${ph.title}」目标  ${ph.goal || '（无）'} → ${patch.goal.trim() || '（无）'}` });
+    ph.goal = patch.goal.trim();
+  }
+  if (patch.due !== undefined) {
+    const due = parseDue(patch.due);
+    if ((due ?? '') !== (ph.due ?? '')) {
+      diff.push({ sign: '~', text: `「${ph.title}」目标日期  ${ph.due ?? '（无）'} → ${due ?? '（无）'}` });
+      if (due) ph.due = due;
+      else delete ph.due;
+    }
+  }
+  if (!diff.length) return '没有变化';
+  emit(d, p, { type: 'edit', phaseId, title: ph.title, text: diff.map((l) => l.text).join('；'), diff });
   return `已更新阶段「${ph.title}」`;
+}
+
+/** Accepts YYYY-MM-DD, MM-DD, +Nd, or empty (clear). */
+export function parseDue(v: string | null | undefined, now = Date.now()): string | undefined {
+  const s = (v ?? '').trim();
+  if (!s) return undefined;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const fmt = (dt: Date) => `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+  let m = s.match(/^\+(\d{1,3})d?$/);
+  if (m) return fmt(new Date(now + Number(m[1]) * DAY));
+  m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) return `${m[1]}-${pad(+m[2])}-${pad(+m[3])}`;
+  m = s.match(/^(\d{1,2})-(\d{1,2})$/);
+  if (m) return `${new Date(now).getFullYear()}-${pad(+m[1])}-${pad(+m[2])}`;
+  return fail('日期格式：YYYY-MM-DD、MM-DD 或 +3d');
+}
+
+/** End of the due day, local time. */
+export function dueAt(due: string): number {
+  const [y, m, dd] = due.split('-').map(Number);
+  return new Date(y, m - 1, dd, 23, 59, 59).getTime();
 }
 
 export function revisePhase(d: AppState, phaseId: string, newGoal: string, reason: string): string {
@@ -149,8 +230,23 @@ export function revisePhase(d: AppState, phaseId: string, newGoal: string, reaso
   const r = reason.trim() || fail('请写下修正原因——这是复盘最有价值的部分');
   const old = ph.goal || '（未设定）';
   ph.goal = g;
-  log(p, 'revise', `修正「${ph.title}」目标：${old} → ${g}｜原因：${r}`);
-  return `已修正阶段「${ph.title}」`;
+  if (!p.versions.length) pushVersion(p, '基准（修正前）');
+  const before = p.versions[p.versions.length - 1].v;
+  const ver = pushVersion(p, r);
+  emit(d, p, {
+    type: 'revise',
+    phaseId,
+    title: ph.title,
+    reason: r,
+    version: ver.v,
+    detail: `v${before} → v${ver.v}`,
+    text: `修正「${ph.title}」目标：${old} → ${g}｜原因：${r}`,
+    diff: [
+      { sign: '-', text: `目标  ${old}` },
+      { sign: '+', text: `目标  ${g}` },
+    ],
+  });
+  return `已修正阶段「${ph.title}」· 计划版本 v${ver.v}`;
 }
 
 export function completePhase(d: AppState, phaseId: string): string {
@@ -159,9 +255,17 @@ export function completePhase(d: AppState, phaseId: string): string {
   if (idx < 0) fail('找不到阶段');
   const ph = p.phases[idx];
   ph.status = 'done';
+  ph.doneAt = Date.now();
   const next = p.phases.slice(idx + 1).find((x) => x.status === 'pending');
   if (next && !p.phases.some((x) => x.status === 'active')) next.status = 'active';
-  log(p, 'phase', `完成阶段「${ph.title}」${next ? `，进入「${next.title}」` : ''}`);
+  const late = ph.due && ph.doneAt > dueAt(ph.due) ? Math.ceil((ph.doneAt - dueAt(ph.due)) / DAY) : 0;
+  emit(d, p, {
+    type: 'phase',
+    phaseId,
+    title: ph.title,
+    text: `完成阶段「${ph.title}」${next ? `，进入「${next.title}」` : ''}`,
+    detail: `完成${ph.due ? ` · 目标 ${ph.due.slice(5)}${late ? ` · 晚 ${late} 天` : ' · 按时'}` : ''}${next ? ` · 进入「${next.title}」` : ''}`,
+  });
   return `阶段「${ph.title}」完成${next ? ` → 进入「${next.title}」` : ''}`;
 }
 
@@ -170,7 +274,8 @@ export function activatePhase(d: AppState, phaseId: string): string {
   const ph = p.phases.find((x) => x.id === phaseId) ?? fail('找不到阶段');
   for (const x of p.phases) if (x.status === 'active') x.status = 'pending';
   ph.status = 'active';
-  log(p, 'phase', `切换到阶段「${ph.title}」`);
+  delete ph.doneAt;
+  emit(d, p, { type: 'phase', phaseId, title: ph.title, text: `切换到阶段「${ph.title}」`, detail: '设为当前阶段' });
   return `当前阶段 → 「${ph.title}」`;
 }
 
@@ -186,14 +291,20 @@ export function movePhase(d: AppState, phaseId: string, dir: -1 | 1) {
 export function deletePhase(d: AppState, phaseId: string): string {
   const p = requirePlan(d);
   const ph = p.phases.find((x) => x.id === phaseId) ?? fail('找不到阶段');
-  const n = p.tasks.filter((t) => t.phaseId === phaseId).length;
+  const gone = p.tasks.filter((t) => t.phaseId === phaseId);
   p.tasks = p.tasks.filter((t) => t.phaseId !== phaseId);
   p.phases = p.phases.filter((x) => x.id !== phaseId);
   if (ph.status === 'active') {
     const nx = p.phases.find((x) => x.status === 'pending');
     if (nx) nx.status = 'active';
   }
-  log(p, 'phase', `删除阶段「${ph.title}」（含 ${n} 个任务）`);
+  emit(d, p, {
+    type: 'remove',
+    phaseId,
+    title: ph.title,
+    text: `删除阶段「${ph.title}」（含 ${gone.length} 个任务）`,
+    diff: [{ sign: '-', text: `## ${ph.title}` }, ...gone.map((t) => ({ sign: '-' as const, text: `☐ ${t.title}` }))],
+  });
   return `已删除阶段「${ph.title}」`;
 }
 
@@ -208,9 +319,11 @@ export function orderedTasks(ws: Workspace): Task[] {
   return out;
 }
 
-function taskList(ws: Workspace): Task[] {
+export function taskList(ws: Workspace): Task[] {
   return ws.kind === 'plan' ? ws.tasks : ws.moves;
 }
+
+const numOf = (ws: Workspace, id: string) => orderedTasks(ws).findIndex((t) => t.id === id) + 1;
 
 export function resolveTask(ws: Workspace, ref: string | undefined): Task {
   const list = orderedTasks(ws);
@@ -237,7 +350,15 @@ export function addTask(d: AppState, title: string, phaseId?: string | null): Ta
   }
   const task: Task = { id: uid(), title: t, status: 'pending', phaseId: pid, createdAt: Date.now() };
   taskList(ws).push(task);
-  log(ws, 'task', `+ ${t}`);
+  const ph = ws.kind === 'plan' ? ws.phases.find((x) => x.id === pid) : undefined;
+  emit(d, ws, {
+    type: 'add',
+    taskId: task.id,
+    title: t,
+    phaseId: pid ?? undefined,
+    text: `+ ${t}`,
+    diff: [{ sign: '+', num: numOf(ws, task.id), text: `☐ ${t}`, note: ph ? ph.title : undefined }],
+  });
   return task;
 }
 
@@ -249,11 +370,23 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   skipped: '跳过',
 };
 
+function lastStartAt(ws: Workspace, taskId: string): number | undefined {
+  for (let i = ws.log.length - 1; i >= 0; i--) {
+    const e = ws.log[i];
+    if (e.taskId === taskId && e.type === 'start') return e.at;
+  }
+  return undefined;
+}
+
 export function setTaskStatus(d: AppState, taskId: string, status: TaskStatus, note?: string): string {
   const ws = requireWs(d);
   const list = taskList(ws);
   const task = list.find((t) => t.id === taskId) ?? fail('找不到任务');
+  const from = task.status;
+  if (from === status) return `${STATUS_LABEL[status]}：${task.title}（未变化）`;
   if (status === 'active') {
+    // First execution freezes the plan as baseline v1 — the reference for Plan Diff.
+    if (ws.kind === 'plan' && !ws.versions.length) commitPlan(d, '', true);
     // Exactly one task in progress at a time, like a focused agent.
     for (const t of list) if (t.status === 'active' && t.id !== taskId) t.status = 'pending';
     if (ws.kind === 'plan' && task.phaseId) {
@@ -265,13 +398,46 @@ export function setTaskStatus(d: AppState, taskId: string, status: TaskStatus, n
     }
   }
   task.status = status;
-  if (status === 'done') task.doneAt = Date.now();
+  const now = Date.now();
+  if (status === 'done') task.doneAt = now;
   else delete task.doneAt;
-  if (note != null && note.trim()) task.note = note.trim();
-  log(ws, 'task', `${STATUS_LABEL[status]}：${task.title}${note?.trim() ? `（${note.trim()}）` : ''}`);
+  const reason = note?.trim() || undefined;
+  if (reason) task.note = reason;
+
+  const type =
+    status === 'active' ? 'start'
+    : status === 'done' ? 'done'
+    : status === 'blocked' ? 'block'
+    : status === 'skipped' ? 'skip'
+    : from === 'done' ? 'reopen'
+    : from === 'blocked' ? 'unblock'
+    : 'pause';
+  const ph = ws.kind === 'plan' ? ws.phases.find((x) => x.id === task.phaseId) : undefined;
+  let durMs: number | undefined;
+  let tokens: number | undefined;
+  if (status === 'done') {
+    const st = lastStartAt(ws, taskId);
+    if (st != null && from === 'active') {
+      // Prefer focused (in-session) time; fall back to wall clock only for short same-sitting work.
+      const focused = focusedMsBetween(d, st, now);
+      durMs = focused > 0 ? focused : now - st < 4 * 3_600_000 ? now - st : undefined;
+      tokens = tokensBetween(d, st, now) || undefined;
+    }
+  }
+  emit(d, ws, {
+    type,
+    taskId,
+    title: task.title,
+    phaseId: task.phaseId ?? undefined,
+    reason,
+    durMs,
+    tokens,
+    detail: type === 'start' && from === 'blocked' ? '解除阻塞后继续' : type === 'start' && ph ? `${ph.title} · #${numOf(ws, taskId)}` : undefined,
+    text: `${STATUS_LABEL[status]}：${task.title}${reason ? `（${reason}）` : ''}`,
+    diff: type === 'skip' ? [{ sign: '-', num: numOf(ws, taskId), text: `☐ ${task.title}`, note: '跳过' }] : undefined,
+  });
   let msg = `${STATUS_LABEL[status]}：${task.title}`;
   if (ws.kind === 'plan' && status === 'done' && task.phaseId) {
-    const ph = ws.phases.find((x) => x.id === task.phaseId);
     const rest = ws.tasks.filter((t) => t.phaseId === task.phaseId && (t.status === 'pending' || t.status === 'active' || t.status === 'blocked'));
     if (ph && ph.status !== 'done' && rest.length === 0) msg += `　·　阶段「${ph.title}」任务已清空，可 /phase done 结束本阶段`;
   }
@@ -288,24 +454,68 @@ export function cycleTask(d: AppState, taskId: string): string {
 /** Complete the in-progress task (if any) and start the next pending one. */
 export function nextTask(d: AppState): string {
   const ws = requireWs(d);
-  const list = orderedTasks(ws);
-  const cur = list.find((t) => t.status === 'active');
+  const cur = orderedTasks(ws).find((t) => t.status === 'active');
   const parts: string[] = [];
   if (cur) parts.push(setTaskStatus(d, cur.id, 'done'));
-  const fresh = orderedTasks(requireWs(d));
-  const nx = fresh.find((t) => t.status === 'pending');
+  const nx = orderedTasks(requireWs(d)).find((t) => t.status === 'pending');
   if (nx) parts.push(setTaskStatus(d, nx.id, 'active'));
   else parts.push('没有更多待办任务 ✓');
   return parts.join('　→　');
 }
 
+/** Push a task later: next unfinished phase (plan) or end of list (goal). */
+export function deferTask(d: AppState, taskId: string, reason = ''): string {
+  const ws = requireWs(d);
+  const list = taskList(ws);
+  const i = list.findIndex((x) => x.id === taskId);
+  if (i < 0) fail('找不到任务');
+  const t = list[i];
+  if (t.status === 'done') fail('已完成的任务不能延期');
+  const r = reason.trim() || undefined;
+  let detail = '移到列表末尾';
+  if (ws.kind === 'plan') {
+    const pi = ws.phases.findIndex((x) => x.id === t.phaseId);
+    const target = ws.phases.slice(pi + 1).find((x) => x.status !== 'done');
+    const from = ws.phases[pi];
+    if (target) {
+      t.phaseId = target.id;
+      detail = `${from?.title ?? '?'} → ${target.title}`;
+    }
+  }
+  list.splice(i, 1);
+  list.push(t);
+  t.status = 'pending';
+  if (r) t.note = r;
+  emit(d, ws, {
+    type: 'defer',
+    taskId,
+    title: t.title,
+    phaseId: t.phaseId ?? undefined,
+    reason: r,
+    detail,
+    text: `延期：${t.title}（${detail}${r ? `；${r}` : ''}）`,
+    diff: [{ sign: '~', num: numOf(ws, taskId), text: `☐ ${t.title}`, note: detail }],
+  });
+  return `已延期：${t.title}（${detail}）`;
+}
+
 export function updateTask(d: AppState, taskId: string, patch: { title?: string; note?: string; phaseId?: string | null }): string {
   const ws = requireWs(d);
   const t = taskList(ws).find((x) => x.id === taskId) ?? fail('找不到任务');
-  if (patch.title != null) t.title = patch.title.trim() || t.title;
+  const diff: DiffLine[] = [];
+  if (patch.title != null && patch.title.trim() && patch.title.trim() !== t.title) {
+    diff.push({ sign: '-', num: numOf(ws, taskId), text: `☐ ${t.title}` }, { sign: '+', num: numOf(ws, taskId), text: `☐ ${patch.title.trim()}` });
+    t.title = patch.title.trim();
+  }
   if (patch.note != null) t.note = patch.note.trim() || undefined;
-  if (patch.phaseId !== undefined && ws.kind === 'plan') t.phaseId = patch.phaseId;
-  ws.updatedAt = Date.now();
+  if (patch.phaseId !== undefined && ws.kind === 'plan' && patch.phaseId !== t.phaseId) {
+    const a = ws.phases.find((x) => x.id === t.phaseId)?.title ?? '?';
+    const b = ws.phases.find((x) => x.id === patch.phaseId)?.title ?? '?';
+    t.phaseId = patch.phaseId;
+    diff.push({ sign: '~', num: numOf(ws, taskId), text: `☐ ${t.title}`, note: `${a} → ${b}` });
+  }
+  if (diff.length) emit(d, ws, { type: 'edit', taskId, title: t.title, text: `修改任务：${t.title}`, diff });
+  else ws.updatedAt = Date.now();
   return `已更新：${t.title}`;
 }
 
@@ -314,8 +524,9 @@ export function deleteTask(d: AppState, taskId: string): string {
   const list = taskList(ws);
   const i = list.findIndex((x) => x.id === taskId);
   if (i < 0) fail('找不到任务');
+  const n = numOf(ws, taskId);
   const [t] = list.splice(i, 1);
-  log(ws, 'task', `- ${t.title}`);
+  emit(d, ws, { type: 'remove', taskId, title: t.title, text: `- ${t.title}`, diff: [{ sign: '-', num: n, text: `☐ ${t.title}` }] });
   return `已删除：${t.title}`;
 }
 
@@ -325,7 +536,6 @@ export function moveTask(d: AppState, taskId: string, dir: -1 | 1) {
   const i = list.findIndex((x) => x.id === taskId);
   if (i < 0) return;
   const t = list[i];
-  // find neighbour within same phase
   let j = i + dir;
   while (j >= 0 && j < list.length && list[j].phaseId !== t.phaseId) j += dir;
   if (j < 0 || j >= list.length) return;
@@ -336,23 +546,41 @@ export function moveTask(d: AppState, taskId: string, dir: -1 | 1) {
 
 export function updateGoal(d: AppState, id: string, patch: Partial<Pick<Goal, 'title' | 'why' | 'doneWhen' | 'cadenceDays' | 'nextAction'>>): string {
   const g = d.goals.find((x) => x.id === id) ?? fail('找不到目标');
-  if (patch.nextAction != null && patch.nextAction.trim() !== g.nextAction) {
-    log(g, 'note', `下一步 → ${patch.nextAction.trim() || '（清空）'}`);
+  const diff: DiffLine[] = [];
+  const field = (k: 'title' | 'why' | 'doneWhen' | 'nextAction', label: string) => {
+    const v = patch[k];
+    if (v == null) return;
+    const nv = v.trim();
+    if (k === 'title' && !nv) return;
+    if (nv !== g[k]) {
+      diff.push({ sign: '~', text: `${label}  ${g[k] || '（无）'} → ${nv || '（无）'}` });
+      g[k] = nv;
+    }
+  };
+  field('title', '目标');
+  field('why', '为什么');
+  field('doneWhen', '完成标准');
+  field('nextAction', '下一步');
+  if (patch.cadenceDays && patch.cadenceDays > 0 && Math.round(patch.cadenceDays) !== g.cadenceDays) {
+    diff.push({ sign: '~', text: `周期  ${g.cadenceDays}d → ${Math.round(patch.cadenceDays)}d` });
+    g.cadenceDays = Math.round(patch.cadenceDays);
   }
-  Object.assign(g, {
-    ...patch,
-    title: patch.title?.trim() || g.title,
-    cadenceDays: patch.cadenceDays && patch.cadenceDays > 0 ? Math.round(patch.cadenceDays) : g.cadenceDays,
-  });
-  g.updatedAt = Date.now();
+  if (diff.length) emit(d, g, { type: 'edit', text: diff.map((x) => x.text).join('；'), diff });
   return `已更新目标「${g.title}」`;
 }
 
 export function updatePlan(d: AppState, id: string, patch: { title?: string; objective?: string }): string {
   const p = d.plans.find((x) => x.id === id) ?? fail('找不到计划');
-  if (patch.title != null) p.title = patch.title.trim() || p.title;
-  if (patch.objective != null) p.objective = patch.objective.trim();
-  p.updatedAt = Date.now();
+  const diff: DiffLine[] = [];
+  if (patch.title != null && patch.title.trim() && patch.title.trim() !== p.title) {
+    diff.push({ sign: '~', text: `标题  ${p.title} → ${patch.title.trim()}` });
+    p.title = patch.title.trim();
+  }
+  if (patch.objective != null && patch.objective.trim() !== p.objective) {
+    diff.push({ sign: '~', text: `目标  ${p.objective || '（无）'} → ${patch.objective.trim() || '（无）'}` });
+    p.objective = patch.objective.trim();
+  }
+  if (diff.length) emit(d, p, { type: 'edit', text: diff.map((x) => x.text).join('；'), diff });
   return `已更新计划「${p.title}」`;
 }
 
@@ -370,8 +598,19 @@ export function addCheckpoint(d: AppState, goalId: string, cp: Omit<Checkpoint, 
   if (!cp.did.trim() && !cp.learned.trim() && !cp.next.trim()) fail('Checkpoint 至少写一项：做了什么 / 学到什么 / 下一步');
   const c: Checkpoint = { ...cp, id: uid(), at: Date.now(), progress: Math.max(0, Math.min(100, Math.round(cp.progress))) };
   g.checkpoints.push(c);
+  const prevNext = g.nextAction;
   if (cp.next.trim()) g.nextAction = cp.next.trim();
-  log(g, 'checkpoint', `Checkpoint #${g.checkpoints.length} · ${c.progress}% · ${c.verdict}${c.next ? ` · 下一步：${c.next}` : ''}`);
+  emit(d, g, {
+    type: 'checkpoint',
+    version: g.checkpoints.length,
+    text: `Checkpoint #${g.checkpoints.length} · ${c.progress}% · ${c.verdict}${c.next ? ` · 下一步：${c.next}` : ''}`,
+    detail: `${c.progress}% · ${{ 'on-track': '顺利', drifting: '偏航', blocked: '受阻', pivot: '转向' }[c.verdict]}`,
+    reason: c.learned || undefined,
+    diff: cp.next.trim() && cp.next.trim() !== prevNext ? [
+      ...(prevNext ? [{ sign: '-' as const, text: `下一步  ${prevNext}` }] : []),
+      { sign: '+', text: `下一步  ${cp.next.trim()}` },
+    ] : undefined,
+  });
   return `已记录 Checkpoint #${g.checkpoints.length}（${c.progress}%）`;
 }
 
@@ -380,10 +619,7 @@ export function addCheckpoint(d: AppState, goalId: string, cp: Omit<Checkpoint, 
 export function setTier(d: AppState, tier: Tier): string {
   d.hie.tier = tier;
   const s = activeSession(d);
-  if (s && s.tier !== tier) {
-    // Split the running session so tokens before the switch keep the old rate.
-    splitSession(d, s, { tier });
-  }
+  if (s && s.tier !== tier) splitSession(d, s, { tier });
   return `模型档位 → ${TIERS[tier].label}`;
 }
 
@@ -407,18 +643,22 @@ export function startSession(d: AppState, opts: { intent: string; plannedMin: nu
   d.hie.tier = opts.tier;
   d.hie.effort = opts.effort;
   const id = uid();
-  d.sessions.push({
-    id,
-    runId: id,
-    wsId: ws?.id ?? null,
-    tier: opts.tier,
-    effort: opts.effort,
-    intent: opts.intent.trim(),
-    plannedMin: Math.max(5, Math.round(opts.plannedMin) || 25),
-    startedAt: Date.now(),
-  });
-  if (ws) log(ws, 'session', `开始专注 Session · ${TIERS[opts.tier].label}/${opts.effort} · ${opts.plannedMin}m${opts.intent.trim() ? ` · ${opts.intent.trim()}` : ''}`);
-  return `Session 开始 · ${TIERS[opts.tier].label} / ${opts.effort} · 计划 ${opts.plannedMin} 分钟`;
+  const planned = Math.max(5, Math.round(opts.plannedMin) || 25);
+  d.sessions.push({ id, runId: id, wsId: ws?.id ?? null, tier: opts.tier, effort: opts.effort, intent: opts.intent.trim(), plannedMin: planned, startedAt: Date.now() });
+  if (ws) {
+    emit(d, ws, {
+      type: 'session-start',
+      runId: id,
+      text: `开始专注 Session · ${TIERS[opts.tier].label}/${opts.effort} · ${planned}m${opts.intent.trim() ? ` · ${opts.intent.trim()}` : ''}`,
+      title: opts.intent.trim() || undefined,
+      detail: `${TIERS[opts.tier].label} · ${opts.effort} · ${planned}m`,
+    });
+  }
+  return `Session 开始 · ${TIERS[opts.tier].label} / ${opts.effort} · 计划 ${planned} 分钟`;
+}
+
+export function runSegments(d: Pick<AppState, 'sessions'>, runId: string): Session[] {
+  return d.sessions.filter((x) => (x.runId ?? x.id) === runId);
 }
 
 export function endSession(d: AppState, opts: { fatigue?: number | null; outcome?: string }): string {
@@ -426,21 +666,28 @@ export function endSession(d: AppState, opts: { fatigue?: number | null; outcome
   const now = Date.now();
   s.endedAt = now;
   s.tokens = sessionTokens(s, now);
-  const run = runSegments(d, s.runId);
   if (opts.fatigue) {
     s.fatigue = opts.fatigue;
     d.fatigue.push({ at: now, level: opts.fatigue });
   }
   if (opts.outcome?.trim()) s.outcome = opts.outcome.trim();
+  const run = runSegments(d, s.runId);
   const ws = findWs(d, s.wsId);
-  const mins = Math.round((now - run[0].startedAt) / 60_000);
+  const durMs = now - run[0].startedAt;
+  const mins = Math.round(durMs / 60_000);
   const total = run.reduce((a, x) => a + (x.tokens ?? 0), 0);
-  if (ws) log(ws, 'session', `结束 Session · ${mins}m · ${total} tokens${s.outcome ? ` · ${s.outcome}` : ''}${opts.fatigue ? ` · 疲劳 ${opts.fatigue}/5` : ''}`);
+  if (ws) {
+    emit(d, ws, {
+      type: 'session-end',
+      runId: s.runId,
+      durMs,
+      tokens: total,
+      reason: s.outcome,
+      detail: opts.fatigue ? `疲劳 ${opts.fatigue}/5` : undefined,
+      text: `结束 Session · ${mins}m · ${total} tokens${s.outcome ? ` · ${s.outcome}` : ''}${opts.fatigue ? ` · 疲劳 ${opts.fatigue}/5` : ''}`,
+    });
+  }
   return `Session 结束 · ${mins} 分钟 · ${total.toLocaleString()} tokens`;
-}
-
-export function runSegments(d: Pick<AppState, 'sessions'>, runId: string): Session[] {
-  return d.sessions.filter((x) => (x.runId ?? x.id) === runId);
 }
 
 export function markFatigue(d: AppState, level: number): string {
@@ -469,16 +716,11 @@ export function saveCompact(d: AppState, wsId: string, text: string): string {
   const ws = findWs(d, wsId) ?? fail('找不到该 Plan/Goal');
   const t = text.trim() || fail('快照内容为空');
   d.compacts.push({ id: uid(), wsId, at: Date.now(), text: t });
-  // Keep the last 20 per workspace.
   const mine = d.compacts.filter((c) => c.wsId === wsId);
   if (mine.length > 20) {
     const drop = new Set(mine.slice(0, mine.length - 20).map((c) => c.id));
     d.compacts = d.compacts.filter((c) => !drop.has(c.id));
   }
-  log(ws, 'compact', '保存了工作快照（Compact）');
+  emit(d, ws, { type: 'compact', text: '保存了工作快照（Compact）' });
   return `已 Compact「${ws.title}」· 下次打开时可 Resume`;
-}
-
-export function requireWsSafe(d: AppState): Workspace | undefined {
-  return currentWs(d);
 }

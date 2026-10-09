@@ -5,6 +5,7 @@ import { execute, type CmdCtx } from '../src/commands';
 import { budgetLevel, estimateTokens, tokensToday } from '../src/hie';
 import { generateCompact } from '../src/compact';
 import { seedDemo } from '../src/demo';
+import { diffPlan, diffSummary } from '../src/diff';
 
 const mkCtx = () => {
   const store = createStore(emptyState(), false);
@@ -38,7 +39,8 @@ describe('plan engine', () => {
     expect(() => ops.revisePhase(d, ph.id, 'new goal', '')).toThrow(ops.UserError);
     ops.revisePhase(d, ph.id, 'new goal', 'learned something');
     expect(d.plans[0].phases[0].goal).toBe('new goal');
-    expect(d.plans[0].log.at(-1)?.kind).toBe('revise');
+    expect(d.plans[0].log.at(-1)?.type).toBe('revise');
+    expect(d.plans[0].versions.map((v) => v.v)).toEqual([1, 2]);
   });
 
   it('completing a phase activates the next one', () => {
@@ -131,6 +133,7 @@ describe('compact & persistence', () => {
     const text = generateCompact(d, d.plans[0]);
     expect(text).toContain('# Compact · 个人网站改版');
     expect(text).toContain('进行中：');
+    expect(text).toMatch(/相对 v1/);
     expect(text).toContain('## 下一步');
     expect(generateCompact(d, d.goals[0])).toContain('今晚下班后快走');
   });
@@ -153,5 +156,62 @@ describe('migration', () => {
     expect(n.hie.tier).toBe('opus');
     expect(n.sessions[0].tier).toBe('haiku');
     expect(n.sessions[0].runId).toBe('s');
+  });
+});
+
+describe('execution log & plan diff', () => {
+  it('records structured events, auto-baselines on first start, tags session runs', () => {
+    const d = emptyState();
+    ops.createPlan(d, 'P');
+    const a = ops.addTask(d, 'a');
+    ops.addTask(d, 'b');
+    expect(d.plans[0].versions).toHaveLength(0);
+    ops.startSession(d, { intent: 'x', plannedMin: 25, tier: 'sonnet', effort: 'medium' });
+    ops.setTaskStatus(d, a.id, 'active');
+    expect(d.plans[0].versions).toHaveLength(1);
+    ops.setTaskStatus(d, a.id, 'done');
+    const types = d.plans[0].log.map((e) => e.type);
+    expect(types).toEqual(['create', 'add', 'add', 'session-start', 'commit', 'start', 'done']);
+    const done = d.plans[0].log.at(-1)!;
+    expect(done.runId).toBe(d.sessions[0].runId);
+    expect(done.durMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('diffs baseline against reality and finds the first drift', () => {
+    const d = emptyState();
+    seedDemo(d);
+    const p = d.plans[0];
+    const pd = diffPlan(p)!;
+    expect(pd.base.v).toBe(1);
+    expect(pd.stats.added).toBe(1); // 确定字体与配色
+    expect(pd.stats.removed).toBe(1); // 博客列表页设计
+    expect(pd.stats.deferred).toBe(1); // 文章页排版
+    expect(pd.stats.revisions).toBe(1);
+    expect(pd.stats.late).toBeGreaterThanOrEqual(1); // 设计 past due
+    expect(pd.firstDrift?.type).toBe('add');
+    expect(pd.firstDriftPhase).toBe('设计');
+    const lines = pd.phases.flatMap((ph) => ph.lines);
+    expect(lines.some((l) => l.sign === '-' && l.text.includes('博客列表页设计'))).toBe(true);
+    expect(lines.some((l) => l.sign === '+' && l.text.includes('确定字体与配色'))).toBe(true);
+    expect(diffSummary(pd)).toMatch(/\+1 −1/);
+  });
+
+  it('defer moves a task to the next unfinished phase', () => {
+    const d = emptyState();
+    ops.createPlan(d, 'P');
+    ops.addPhase(d, 'B');
+    const t = ops.addTask(d, 'x');
+    ops.deferTask(d, t.id, 'later');
+    expect(d.plans[0].tasks[0].phaseId).toBe(d.plans[0].phases[1].id);
+    expect(d.plans[0].log.at(-1)?.type).toBe('defer');
+  });
+
+  it('migrates legacy text logs', () => {
+    const d = emptyState();
+    const raw = JSON.parse(JSON.stringify(d));
+    raw.plans = [{ id: 'p', kind: 'plan', title: 'P', objective: '', status: 'active', phases: [], tasks: [], log: [{ id: 'l', at: 1, kind: 'task', text: '+ a' }, { id: 'm', at: 2, kind: 'revise', text: 'r' }], createdAt: 0, updatedAt: 0 }];
+    const n = normalize(raw);
+    expect(n.plans[0].versions).toEqual([]);
+    expect(n.plans[0].log.map((e) => e.type)).toEqual(['legacy', 'revise']);
   });
 });

@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { AppState, Goal, Plan, Tier, Workspace } from './types';
+import type { AppState, Goal, LogEntry, Plan, Tier, Workspace } from './types';
 
 export const STORAGE_KEY = 'automedo.v0';
 const UNDO_LIMIT = 50;
@@ -37,12 +37,12 @@ export function normalize(raw: unknown): AppState {
   }
   const base = emptyState();
   const s = raw as unknown as AppState;
-  const plans = s.plans.map((p) => ({ ...p, phases: p.phases ?? [], tasks: p.tasks ?? [], log: p.log ?? [] }));
+  const plans = s.plans.map((p) => ({ ...p, phases: p.phases ?? [], tasks: p.tasks ?? [], versions: p.versions ?? [], log: migrateLog(p.log) }));
   const goals = s.goals.map((g) => ({
     ...g,
     moves: g.moves ?? [],
     checkpoints: g.checkpoints ?? [],
-    log: g.log ?? [],
+    log: migrateLog(g.log),
     cadenceDays: g.cadenceDays || 7,
   }));
   for (const w of [...plans, ...goals]) {
@@ -60,6 +60,15 @@ export function normalize(raw: unknown): AppState {
     hie: { ...base.hie, ...(isObj(s.hie) ? s.hie : {}), tier: migrateTier(isObj(s.hie) ? s.hie.tier : undefined) },
     ui: { ...base.ui, ...(isObj(s.ui) ? s.ui : {}) },
   };
+}
+
+// Logs before the structured Execution Log only had { kind, text }.
+const KIND_TO_TYPE: Record<string, LogEntry['type']> = { create: 'create', revise: 'revise', note: 'note', checkpoint: 'checkpoint', compact: 'compact' };
+function migrateLog(log: unknown): LogEntry[] {
+  if (!Array.isArray(log)) return [];
+  return log.map((e: Record<string, unknown>) =>
+    e.type ? (e as unknown as LogEntry) : ({ id: String(e.id), at: Number(e.at), text: String(e.text ?? ''), type: KIND_TO_TYPE[String(e.kind)] ?? 'legacy' } as LogEntry),
+  );
 }
 
 // Tier names changed from lite/core/deep to haiku/sonnet/opus.
