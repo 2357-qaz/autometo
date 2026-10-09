@@ -66,6 +66,7 @@ export const COMMANDS: Command[] = [
       return ok('⏵ goal mode on', false);
     },
   },
+  { name: 'switch', desc: '切换 / 管理 Plan 与 Goal（o）', run: (_, c) => void c.open({ type: 'switch' }) },
   {
     name: 'task',
     args: '<内容>',
@@ -155,12 +156,12 @@ export const COMMANDS: Command[] = [
   },
   {
     name: 'model',
-    args: '[lite|core|deep]',
+    args: '[haiku|sonnet|opus]',
     desc: '切换模型档位（不带参数则轮换）',
     run: (a, c) => {
       const s = c.store.get();
       const t = (a.trim().toLowerCase() || TIER_ORDER[(TIER_ORDER.indexOf(s.hie.tier) + 1) % 3]) as Tier;
-      if (!TIER_ORDER.includes(t)) return { text: `未知档位「${a}」。可选：lite / core / deep`, error: true };
+      if (!TIER_ORDER.includes(t)) return { text: `未知档位「${a}」。可选：haiku / sonnet / opus`, error: true };
       return mut(c, '切换档位', (d) => ops.setTier(d, t));
     },
   },

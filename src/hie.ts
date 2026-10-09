@@ -4,9 +4,9 @@ import type { AppState, Effort, Session, Tier } from './types';
 import { startOfDay } from './util';
 
 export const TIERS: Record<Tier, { label: string; rate: number; hint: string }> = {
-  lite: { label: 'Lite', rate: 400, hint: '轻量：回复消息、整理、杂事' },
-  core: { label: 'Core', rate: 800, hint: '常规：日常推进、写作、编码' },
-  deep: { label: 'Deep', rate: 1500, hint: '深度：难题、设计、需要整块专注' },
+  haiku: { label: 'Haiku', rate: 400, hint: '轻量：回复消息、整理、杂事' },
+  sonnet: { label: 'Sonnet', rate: 800, hint: '常规：日常推进、写作、编码' },
+  opus: { label: 'Opus', rate: 1500, hint: '深度：难题、设计、需要整块专注' },
 };
 
 export const EFFORTS: Record<Effort, { label: string; mult: number; hint: string }> = {
@@ -15,7 +15,7 @@ export const EFFORTS: Record<Effort, { label: string; mult: number; hint: string
   high: { label: 'high', mult: 1.5, hint: '全力以赴（think hard）' },
 };
 
-export const TIER_ORDER: Tier[] = ['lite', 'core', 'deep'];
+export const TIER_ORDER: Tier[] = ['haiku', 'sonnet', 'opus'];
 export const EFFORT_ORDER: Effort[] = ['low', 'medium', 'high'];
 
 export const FATIGUE_LABELS = ['', '精力充沛', '状态不错', '一般', '有点累', '需要休息'];
@@ -76,9 +76,9 @@ export function budgetLevel(used: number, budget: number): BudgetLevel {
 export function hieAdvice(used: number, budget: number, fatigue: number | null): string | null {
   const lvl = budgetLevel(used, budget);
   if (lvl === 'over') return '今日预算已用完。可以收尾：/compact 留下上下文，明天继续。';
-  if (fatigue != null && fatigue >= 5) return '你标记了需要休息。建议切到 Lite 档或直接休息。';
+  if (fatigue != null && fatigue >= 5) return '你标记了需要休息。建议切到 Haiku 档或直接休息。';
   if (lvl === 'low') return '预算即将用完，建议 /compact 保存进度。';
-  if (fatigue != null && fatigue >= 4) return '有点累了：试试 /model lite 或 /effort low。';
+  if (fatigue != null && fatigue >= 4) return '有点累了：试试 /model haiku 或 /effort low。';
   return null;
 }
 

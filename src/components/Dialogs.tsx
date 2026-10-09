@@ -5,8 +5,8 @@ import { COMMANDS } from '../commands';
 import { generateCompact } from '../compact';
 import { activeSession, EFFORT_ORDER, EFFORTS, estimateTokens, FATIGUE_LABELS, runSegmentsTokens, TIER_ORDER, TIERS, tokensToday } from '../hie';
 import * as ops from '../ops';
-import { activePlan, findWs } from '../store';
-import type { Effort, Tier, Verdict } from '../types';
+import { activePlan, currentWs, findWs } from '../store';
+import type { Effort, Tier, Verdict, Workspace } from '../types';
 import { fmtAgo, fmtDuration, fmtTokens } from '../util';
 
 function Shell(props: { title: ReactNode; desc?: ReactNode; wide?: boolean; onSubmit?: () => void; children: ReactNode; actions?: ReactNode; submitLabel?: string; danger?: boolean; error?: string | null }) {
@@ -102,6 +102,8 @@ export function DialogHost({ dialog }: { dialog: Dialog }) {
       return <EditTask taskId={dialog.taskId} />;
     case 'help':
       return <Help />;
+    case 'switch':
+      return <Switcher />;
     case 'confirm':
       return <Confirm {...dialog} />;
   }
@@ -459,6 +461,7 @@ const KEYS: [string, string][] = [
   ['e', '编辑选中任务'],
   ['x', '删除选中任务（可撤销）'],
   ['J / K', '下移 / 上移选中任务'],
+  ['o', '打开 Plan / Goal 列表'],
   ['[ / ]', '上一个 / 下一个 Plan 或 Goal'],
   ['n', '新建 Plan / Goal（随当前模式）'],
   ['f', '开始 / 结束专注 Session'],
@@ -486,9 +489,76 @@ function Help() {
       </div>
       <div className="help-sec">Human Inference Engine</div>
       <div className="dim">
-        档位：Lite 400 / Core 800 / Deep 1500 tokens·min⁻¹；强度：low ×0.6 / medium ×1 / high ×1.5。Session 运行时按分钟累计，计入每日预算。
+        档位：Haiku 400 / Sonnet 800 / Opus 1500 tokens·min⁻¹；强度：low ×0.6 / medium ×1 / high ×1.5。Session 运行时按分钟累计，计入每日预算。
       </div>
       <div className="disclaimer">“模型”“Token”只是交互隐喻，不代表真实 AI 推理，也不是对脑力或疲劳的生理测量。</div>
+    </Shell>
+  );
+}
+
+function wsMeta(w: Workspace): string {
+  if (w.kind === 'plan') {
+    const ts = w.tasks.filter((t) => t.status !== 'skipped');
+    const a = w.tasks.find((t) => t.status === 'active');
+    return `${ts.filter((t) => t.status === 'done').length}/${ts.length}${a ? ` · ◼ ${a.title}` : ''}`;
+  }
+  const last = w.checkpoints[w.checkpoints.length - 1];
+  return `${ops.checkpointDue(w) ? '⚑ 到期 · ' : ''}${last ? `${last.progress}%` : '–'}${w.nextAction ? ` · ${w.nextAction}` : ''}`;
+}
+
+/** Workspace picker, like Claude Code's /resume list. */
+function Switcher() {
+  const { state, store, close, open, run } = useApp();
+  const [q, setQ] = useState('');
+  const cur = currentWs(state);
+  const ORDER = { active: 0, paused: 1, done: 2, archived: 3 } as const;
+  const all: Workspace[] = [...state.plans, ...state.goals]
+    .filter((w) => !q || w.title.toLowerCase().includes(q.toLowerCase()))
+    .sort((a, b) => ORDER[a.status] - ORDER[b.status] || b.updatedAt - a.updatedAt);
+  const [idx, setIdx] = useState(() => Math.max(0, all.findIndex((w) => w.id === cur?.id)));
+  const pick = (w: Workspace | undefined) => {
+    if (!w) return;
+    store.mutate(null, (d) => ops.selectWs(d, w.id));
+    close();
+  };
+  return (
+    <Shell
+      title="切换 Plan / Goal"
+      actions={
+        <>
+          <button type="button" className="btn" onClick={() => open({ type: 'newPlan' })}>+ Plan</button>
+          <button type="button" className="btn" onClick={() => open({ type: 'newGoal' })}>+ Goal</button>
+          <button type="button" className="btn ghost" onClick={() => { close(); run('/export'); }}>导出</button>
+          <button type="button" className="btn ghost" onClick={() => { close(); run('/import'); }}>导入</button>
+        </>
+      }
+    >
+      <div className="field">
+        <input
+          data-autofocus
+          value={q}
+          placeholder="搜索…（↑↓ 选择，回车打开）"
+          onChange={(e) => {
+            setQ(e.target.value);
+            setIdx(0);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown') { e.preventDefault(); setIdx((i) => Math.min(all.length - 1, i + 1)); }
+            if (e.key === 'ArrowUp') { e.preventDefault(); setIdx((i) => Math.max(0, i - 1)); }
+            if (e.key === 'Enter') { e.preventDefault(); pick(all[idx]); }
+          }}
+        />
+      </div>
+      <div className="picker" role="listbox">
+        {all.length === 0 && <div className="faint">{q ? '没有匹配项' : '还没有 Plan 或 Goal'}</div>}
+        {all.map((w, i) => (
+          <div key={w.id} role="option" aria-selected={i === idx} className={`pick ${w.status !== 'active' ? 'muted' : ''}`} onMouseEnter={() => setIdx(i)} onClick={() => pick(w)}>
+            <span className={w.kind === 'plan' ? 'teal' : 'violet'}>{w.kind === 'plan' ? '⏸' : '⏵⏵'}</span>
+            <span className="t">{w.title}{w.id === cur?.id && <span className="faint"> (当前)</span>}</span>
+            <span className="faint m">{w.status !== 'active' ? `${w.status} · ` : ''}{wsMeta(w)}</span>
+          </div>
+        ))}
+      </div>
     </Shell>
   );
 }

@@ -1,154 +1,177 @@
+import { useState } from 'react';
 import type { Plan } from '../types';
 import { useApp } from '../ctx';
 import * as ops from '../ops';
+import { activeSession } from '../hie';
 import { bar } from '../util';
+import { Fold } from './Fold';
 import { AddRow, InlineEdit } from './Inline';
-import { LogBlock } from './LogBlock';
-import { TaskRow } from './TaskRow';
+import { LogList } from './LogBlock';
+import { DoneLine, TaskRow } from './TaskRow';
+
+const MAX_LATER = 5;
 
 export function PlanView({ plan, selTaskId, setSel }: { plan: Plan; selTaskId: string | null; setSel: (id: string) => void }) {
-  const { act, open } = useApp();
+  const { act, open, run, state } = useApp();
+  const sess = activeSession(state);
+  const [showDone, setShowDone] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const ordered = ops.orderedTasks(plan);
+  const num = (id: string) => ordered.findIndex((t) => t.id === id) + 1;
   const counted = ordered.filter((t) => t.status !== 'skipped');
-  const done = counted.filter((t) => t.status === 'done').length;
-  const ratio = counted.length ? done / counted.length : 0;
+  const doneN = counted.filter((t) => t.status === 'done').length;
   const active = ordered.find((t) => t.status === 'active');
-  const nextT = ordered.find((t) => t.status === 'pending');
   const phase = ops.currentPhase(plan);
-  const blocked = ordered.filter((t) => t.status === 'blocked');
+  const phaseIdx = phase ? plan.phases.indexOf(phase) : -1;
+
+  const open_ = ordered.filter((t) => t.status !== 'done' && t.status !== 'skipped');
+  const now = open_.filter((t) => t.phaseId === phase?.id);
+  const later = open_.filter((t) => t.phaseId !== phase?.id);
+  const laterShown = showAll ? later : later.slice(0, MAX_LATER);
+  const done = ordered.filter((t) => t.status === 'done' || t.status === 'skipped');
+  const nextT = (active ? open_.filter((t) => t.id !== active.id) : open_).find((t) => t.status === 'pending');
 
   return (
-    <div className="main-inner">
-      <section className="hero" aria-label="计划概览">
-        <h1>
-          <span className="teal">⏸</span>
+    <div className="col">
+      <div className="ws-head">
+        <div className="ws-title">
           <InlineEdit value={plan.title} ariaLabel="计划标题" onSave={(v) => act('重命名', (d) => ops.updatePlan(d, plan.id, { title: v }))} />
-          <span className={`tag ${plan.status === 'active' ? 'active' : plan.status === 'done' ? 'done' : ''}`}>{plan.status}</span>
-        </h1>
-        <div className="sub">
-          目标：
-          <InlineEdit value={plan.objective} placeholder="写下这份计划要达成什么" ariaLabel="计划目标" onSave={(v) => act('编辑目标', (d) => ops.updatePlan(d, plan.id, { objective: v }))} />
+          {plan.status !== 'active' && <span className="tag">{plan.status}</span>}
         </div>
-        <div className="qa">
-          <div>
-            <div className="q">我要做什么</div>
-            <div className="a">{phase ? <>「{phase.title}」{phase.goal ? <span className="dim"> {phase.goal}</span> : null}</> : <span className="faint">还没有阶段</span>}</div>
-          </div>
-          <div>
-            <div className="q">我做到哪里</div>
-            <div className="a">
-              <span className="meter teal">{bar(ratio, 10)}</span> {Math.round(ratio * 100)}% <span className="dim">({done}/{counted.length})</span>
-              {active && <div className="accent">◼ {active.title}</div>}
-              {blocked.length > 0 && <div className="red">✗ {blocked.length} 项阻塞</div>}
-            </div>
-          </div>
-          <div>
-            <div className="q">下一步怎么办</div>
-            <div className="a">
-              {active ? (
-                <>完成当前任务后 <span className="kbd">/next</span>{nextT && <div className="dim">→ {nextT.title}</div>}</>
-              ) : nextT ? (
-                <>
-                  {nextT.title}{' '}
-                  <button className="btn primary" onClick={() => act('开始任务', (d) => ops.setTaskStatus(d, nextT.id, 'active'))}>▶ 开始</button>
-                </>
-              ) : ordered.length ? (
-                <span className="green">全部完成 ✓ 可以 /compact 收尾</span>
-              ) : (
-                <span className="faint">在下方添加第一个任务</span>
-              )}
-            </div>
-          </div>
+        <div className="dim">
+          {phase && (
+            <>
+              <span className="teal">Phase {phaseIdx + 1}/{plan.phases.length} · {phase.title}</span>
+              {phase.goal && <> — {phase.goal}</>}
+              {'　'}
+            </>
+          )}
+          <span className="meter">{bar(counted.length ? doneN / counted.length : 0, 10)}</span> {doneN}/{counted.length}
         </div>
+      </div>
+
+      {/* ── Focus: the one thing in progress ── */}
+      <section className={`focus ${active && selTaskId === active.id ? 'sel' : ''}`} aria-label="当前任务" data-task-id={active?.id} onMouseDown={() => active && setSel(active.id)}>
+        {active ? (
+          <>
+            <div className="focus-main">
+              <span className="accent">⏺</span>
+              <span className="focus-title">{active.title}</span>
+            </div>
+            <div className="focus-sub">
+              <span className="faint">⎿</span>
+              <span className="dim">{nextT ? <>然后：{nextT.title}</> : '这是最后一项'}</span>
+            </div>
+            <div className="focus-actions">
+              <button className="btn primary" onClick={() => run('/next')}>✓ 完成{nextT ? '并继续' : ''}</button>
+              <button className="btn" onClick={() => run(sess ? '/end' : '/session')}>{sess ? '■ 结束专注' : '✻ 专注'}</button>
+              <button className="btn ghost" onClick={() => act('标记阻塞', (d) => ops.setTaskStatus(d, active.id, 'blocked'))}>✗ 卡住了</button>
+            </div>
+          </>
+        ) : nextT ? (
+          <>
+            <div className="focus-main">
+              <span className="faint">◇</span>
+              <span className="dim">没有进行中的任务。下一个：</span>
+              <span className="focus-title">{nextT.title}</span>
+            </div>
+            <div className="focus-actions">
+              <button className="btn primary" onClick={() => act('开始任务', (d) => ops.setTaskStatus(d, nextT.id, 'active'))}>▶ 开始</button>
+            </div>
+          </>
+        ) : ordered.length ? (
+          <div className="focus-main">
+            <span className="green">✓</span>
+            <span>全部完成。</span>
+            <button className="btn" onClick={() => run('/compact')}>/compact 收尾</button>
+          </div>
+        ) : (
+          <div className="focus-main">
+            <span className="faint">◇</span>
+            <span className="dim">还没有任务。在下方输入一件要做的事，回车即可添加。</span>
+          </div>
+        )}
       </section>
 
-      {plan.phases.length > 1 && (
-        <section className="block" aria-label="进度概览">
-          <div className="block-h">
-            <span className="bullet teal">⏺</span>
-            <span className="title">Progress</span>
-          </div>
-          <div className="overview">
-            {plan.phases.map((ph, i) => {
-              const ts = plan.tasks.filter((t) => t.phaseId === ph.id && t.status !== 'skipped');
-              const dn = ts.filter((t) => t.status === 'done').length;
-              const r = ts.length ? dn / ts.length : ph.status === 'done' ? 1 : 0;
-              return [
-                <span key={ph.id + 'n'} className={ph.status === 'active' ? 'teal' : ph.status === 'done' ? 'faint' : ''}>
-                  {i + 1}. {ph.title}
-                </span>,
-                <span key={ph.id + 'b'} className="meter">{bar(r, 20)}</span>,
-                <span key={ph.id + 'c'} className="dim">{dn}/{ts.length}</span>,
-              ];
-            })}
-          </div>
+      {/* ── Todos ── */}
+      {(open_.length > 0 || done.length > 0) && (
+        <section className="todos" aria-label="待办">
+          {now.filter((t) => t.id !== active?.id).map((t) => (
+            <TaskRow key={t.id} task={t} num={num(t.id)} selected={selTaskId === t.id} onSelect={() => setSel(t.id)} />
+          ))}
+          {laterShown.length > 0 && (
+            <>
+              <div className="todo-sep faint">— 之后的阶段 —</div>
+              {laterShown.map((t) => (
+                <TaskRow key={t.id} task={t} num={num(t.id)} dim selected={selTaskId === t.id} onSelect={() => setSel(t.id)} />
+              ))}
+            </>
+          )}
+          {later.length > MAX_LATER && (
+            <button className="done-line" onClick={() => setShowAll(!showAll)}>
+              <span className="faint">{showAll ? '收起 ▴' : `… 还有 ${later.length - MAX_LATER} 项 ▸`}</span>
+            </button>
+          )}
+          <DoneLine count={done.length} open={showDone} onToggle={() => setShowDone(!showDone)} />
+          {showDone && done.map((t) => <TaskRow key={t.id} task={t} num={num(t.id)} selected={selTaskId === t.id} onSelect={() => setSel(t.id)} />)}
         </section>
       )}
 
-      <section className="block" aria-label="计划与任务">
-        <div className="block-h">
-          <span className="bullet">⏺</span>
-          <span className="title">Update Todos</span>
-          <span className="dim">· {plan.phases.length} 个阶段</span>
-          <div className="actions">
-            <button className="btn" onClick={() => act('新增阶段', (d) => ops.addPhase(d, ''))}>+ 阶段</button>
+      <div className="folds">
+        <Fold title="阶段" meta={`${plan.phases.length}`}>
+          <div className="dim" style={{ marginBottom: 6 }}>
+            目标：
+            <InlineEdit value={plan.objective} placeholder="写下这份计划要达成什么" ariaLabel="计划目标" onSave={(v) => act('编辑目标', (d) => ops.updatePlan(d, plan.id, { objective: v }))} />
           </div>
-        </div>
-        {plan.phases.length === 0 && <div className="side-empty">还没有阶段。点击「+ 阶段」或输入 /phase &lt;标题&gt;</div>}
-        {plan.phases.map((ph, i) => {
-          const tasks = ordered.filter((t) => t.phaseId === ph.id);
-          return (
-            <div key={ph.id} className={`phase st-${ph.status}`}>
-              <div className="phase-h tree">
-                <span className="faint">{i === 0 ? '⎿' : ' '}</span>
-                <span className="name">
-                  <InlineEdit value={ph.title} ariaLabel="阶段标题" onSave={(v) => act('编辑阶段', (d) => ops.updatePhase(d, ph.id, { title: v }))} />
-                </span>
-                <span className={`tag ${ph.status}`}>{ph.status === 'active' ? '当前阶段' : ph.status === 'done' ? '已完成' : '待开始'}</span>
-                <div className="actions" style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
-                  <button className="btn ghost" title="修正阶段目标并记录原因" onClick={() => open({ type: 'revise', phaseId: ph.id })}>↻ 修正</button>
-                  {ph.status !== 'done' ? (
-                    <button className="btn ghost" onClick={() => act('完成阶段', (d) => ops.completePhase(d, ph.id))}>✓ 完成阶段</button>
-                  ) : null}
-                  {ph.status !== 'active' && (
-                    <button className="btn ghost" onClick={() => act('切换阶段', (d) => ops.activatePhase(d, ph.id))}>设为当前</button>
-                  )}
-                  <button className="icon-btn" title="上移" onClick={() => act('移动阶段', (d) => ops.movePhase(d, ph.id, -1))}>↑</button>
-                  <button className="icon-btn" title="下移" onClick={() => act('移动阶段', (d) => ops.movePhase(d, ph.id, 1))}>↓</button>
-                  <button
-                    className="icon-btn danger"
-                    title="删除阶段"
-                    onClick={() =>
-                      tasks.length
-                        ? open({
-                            type: 'confirm',
-                            title: `删除阶段「${ph.title}」？`,
-                            message: `其中的 ${tasks.length} 个任务也会被删除。可以 Ctrl+Z 撤销。`,
-                            confirmLabel: '删除',
-                            danger: true,
-                            onConfirm: () => act('删除阶段', (d) => ops.deletePhase(d, ph.id)),
-                          })
-                        : act('删除阶段', (d) => ops.deletePhase(d, ph.id))
-                    }
-                  >
-                    ⌫
-                  </button>
+          {plan.phases.map((ph, i) => {
+            const ts = plan.tasks.filter((t) => t.phaseId === ph.id && t.status !== 'skipped');
+            const dn = ts.filter((t) => t.status === 'done').length;
+            return (
+              <div key={ph.id} className={`phase st-${ph.status}`}>
+                <div className="phase-h">
+                  <span className={ph.status === 'active' ? 'teal' : ph.status === 'done' ? 'green' : 'faint'}>{ph.status === 'done' ? '✓' : ph.status === 'active' ? '▸' : '·'}</span>
+                  <span className="name">
+                    {i + 1}. <InlineEdit value={ph.title} ariaLabel="阶段标题" onSave={(v) => act('编辑阶段', (d) => ops.updatePhase(d, ph.id, { title: v }))} />
+                  </span>
+                  <span className="faint">{dn}/{ts.length}</span>
+                  <span className="phase-tools">
+                    <button className="icon-btn" title="修正阶段目标（记录原因）" onClick={() => open({ type: 'revise', phaseId: ph.id })}>↻ 修正</button>
+                    {ph.status !== 'done' && <button className="icon-btn" onClick={() => act('完成阶段', (d) => ops.completePhase(d, ph.id))}>✓ 完成</button>}
+                    {ph.status !== 'active' && <button className="icon-btn" onClick={() => act('切换阶段', (d) => ops.activatePhase(d, ph.id))}>设为当前</button>}
+                    <button className="icon-btn" title="上移" onClick={() => act('移动阶段', (d) => ops.movePhase(d, ph.id, -1))}>↑</button>
+                    <button className="icon-btn" title="下移" onClick={() => act('移动阶段', (d) => ops.movePhase(d, ph.id, 1))}>↓</button>
+                    <button
+                      className="icon-btn danger"
+                      title="删除阶段"
+                      onClick={() =>
+                        ts.length
+                          ? open({
+                              type: 'confirm',
+                              title: `删除阶段「${ph.title}」？`,
+                              message: `其中的 ${ts.length} 个任务也会被删除。可以 Ctrl+Z 撤销。`,
+                              confirmLabel: '删除',
+                              danger: true,
+                              onConfirm: () => act('删除阶段', (d) => ops.deletePhase(d, ph.id)),
+                            })
+                          : act('删除阶段', (d) => ops.deletePhase(d, ph.id))
+                      }
+                    >
+                      ⌫
+                    </button>
+                  </span>
+                </div>
+                <div className="phase-goal">
+                  <InlineEdit value={ph.goal} placeholder="阶段目标：结束时应达到什么状态？" ariaLabel="阶段目标" onSave={(v) => act('编辑阶段目标', (d) => ops.updatePhase(d, ph.id, { goal: v }))} />
                 </div>
               </div>
-              <div className="phase-goal">
-                <span className="lbl">阶段目标：</span>
-                <InlineEdit value={ph.goal} placeholder="这个阶段结束时应该达到什么状态？" ariaLabel="阶段目标" onSave={(v) => act('编辑阶段目标', (d) => ops.updatePhase(d, ph.id, { goal: v }))} />
-              </div>
-              {tasks.map((t) => (
-                <TaskRow key={t.id} task={t} num={ordered.indexOf(t) + 1} selected={selTaskId === t.id} onSelect={() => setSel(t.id)} />
-              ))}
-              {ph.status !== 'done' && <AddRow placeholder="+ 添加任务，回车确认" onAdd={(v) => act('添加任务', (d) => void ops.addTask(d, v, ph.id))} />}
-            </div>
-          );
-        })}
-      </section>
-
-      <LogBlock ws={plan} title="Execution Log" />
+            );
+          })}
+          <AddRow placeholder="+ 新增阶段，回车确认" onAdd={(v) => act('新增阶段', (d) => ops.addPhase(d, v))} />
+        </Fold>
+        <Fold title="日志" meta={`${plan.log.length}`}>
+          <LogList ws={plan} />
+        </Fold>
+      </div>
     </div>
   );
 }

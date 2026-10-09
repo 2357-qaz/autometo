@@ -9,4 +9,5 @@ export type Dialog =
   | { type: 'resume'; compactId: string }
   | { type: 'editTask'; taskId: string }
   | { type: 'help' }
+  | { type: 'switch' }
   | { type: 'confirm'; title: string; message: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void };

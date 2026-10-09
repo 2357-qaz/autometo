@@ -1,48 +1,37 @@
 import type { Mode } from '../types';
 import { useApp } from '../ctx';
 
-const LOGO = String.raw`
-   ___       _____                    ___
-  / _ |__ __/_  _/__  __ _  ___ ___  / _ \___
- / __ / // / / // _ \/  ' \/ -_) _ \/ // / _ \
-/_/ |_\_,_/ /_/ \___/_/_/_/\__/\___/____/\___/`;
-
 export function Welcome({ mode, onDemo }: { mode: Mode; onDemo: () => void }) {
-  const { open, state, focusPrompt } = useApp();
+  const { open, state } = useApp();
   const empty = !state.plans.length && !state.goals.length;
   return (
-    <div className="main-inner">
-      <div className="welcome" style={mode === 'goal' ? { borderColor: 'var(--violet)' } : undefined}>
-        <pre aria-hidden="true">{LOGO}</pre>
-        <h2>
-          <span className="accent">✻</span> 欢迎使用 AuTomeDo
-        </h2>
-        <div className="dim">像编写 Agent 计划一样组织自己的工作。随时打开，都能知道：我要做什么 · 我做到哪里 · 下一步怎么办。</div>
-        <ul>
-          <li>
-            <span className="teal">⏸ Plan Mode</span> — 先想再做：写计划、划分阶段、执行任务、记录与修正。
-          </li>
-          <li>
-            <span className="violet">⏵⏵ Goal Mode</span> — 先干起来再想：设目标、开始行动、定期 Checkpoint 找方向。
-          </li>
-          <li>
-            <span className="accent">✻ HIE</span> — 选择今天的档位（Lite/Core/Deep）与强度，开专注 Session，管理每日 Token 预算。
-          </li>
-          <li>
-            <span className="blue">◇ Compact / Resume</span> — 结束时留下快照，下次打开一键恢复上下文。
-          </li>
-        </ul>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-          {mode === 'plan' ? (
-            <button className="btn primary" onClick={() => open({ type: 'newPlan' })}>+ 新建 Plan</button>
-          ) : (
-            <button className="btn primary" onClick={() => open({ type: 'newGoal' })}>+ 新建 Goal</button>
-          )}
-          <button className="btn" onClick={() => focusPrompt('/')}>输入命令 <span className="kbd">/</span></button>
-          {empty && <button className="btn" onClick={onDemo}>载入示例数据</button>}
-          <button className="btn ghost" onClick={() => open({ type: 'help' })}>快捷键 <span className="kbd">?</span></button>
+    <div className="col">
+      <div className="welcome">
+        <div>
+          <span className="accent">✻</span> <span className="bold">Welcome to AuTomeDo</span>
         </div>
-        <div className="disclaimer">提示：Shift+Tab 在 Plan / Goal 模式间切换。“模型”“Token”是交互隐喻，不是真实 AI 推理或生理测量。</div>
+        <div className="dim" style={{ marginTop: 6 }}>像编写 Agent 计划一样组织自己的工作。</div>
+      </div>
+      <div className="tips">
+        <div className="dim">Tips for getting started:</div>
+        <ol>
+          <li>
+            {mode === 'plan' ? '路径清楚？' : '路径还不清楚？'}直接在下方输入{mode === 'plan' ? '计划' : '目标'}标题并回车
+            {state.plans.length + state.goals.length > 0 && <>，或按 <span className="kbd">o</span> 打开已有的</>}
+          </li>
+          <li>
+            <span className="kbd">shift+tab</span> 在 <span className="teal">plan mode</span>（先想再做）和 <span className="violet">goal mode</span>（先干起来再想）间切换
+          </li>
+          <li>
+            输入 <span className="kbd">/</span> 查看命令，<span className="kbd">?</span> 查看快捷键
+          </li>
+        </ol>
+        <div className="row-btns">
+          <button className="btn primary" onClick={() => open({ type: mode === 'plan' ? 'newPlan' : 'newGoal' })}>
+            + 新建 {mode === 'plan' ? 'Plan' : 'Goal'}
+          </button>
+          {empty && <button className="btn" onClick={onDemo}>载入示例数据</button>}
+        </div>
       </div>
     </div>
   );

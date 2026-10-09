@@ -2,7 +2,7 @@ export type Mode = 'plan' | 'goal';
 export type TaskStatus = 'pending' | 'active' | 'done' | 'blocked' | 'skipped';
 export type PhaseStatus = 'pending' | 'active' | 'done';
 export type WsStatus = 'active' | 'paused' | 'done' | 'archived';
-export type Tier = 'lite' | 'core' | 'deep';
+export type Tier = 'haiku' | 'sonnet' | 'opus';
 export type Effort = 'low' | 'medium' | 'high';
 export type Verdict = 'on-track' | 'drifting' | 'blocked' | 'pivot';
 

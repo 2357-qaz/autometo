@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { AppState, Goal, Plan, Workspace } from './types';
+import type { AppState, Goal, Plan, Tier, Workspace } from './types';
 
 export const STORAGE_KEY = 'automedo.v0';
 const UNDO_LIMIT = 50;
@@ -13,7 +13,7 @@ export function emptyState(now = Date.now()): AppState {
     compacts: [],
     fatigue: [],
     settings: { dailyBudget: 200_000 },
-    hie: { tier: 'core', effort: 'medium' },
+    hie: { tier: 'sonnet', effort: 'medium' },
     ui: {
       mode: 'plan',
       activePlanId: null,
@@ -48,7 +48,7 @@ export function normalize(raw: unknown): AppState {
   for (const w of [...plans, ...goals]) {
     if (typeof w.id !== 'string' || typeof w.title !== 'string') throw new Error('Plan/Goal 缺少 id 或 title');
   }
-  const sessions = s.sessions.map((x) => ({ ...x, runId: x.runId ?? x.id }));
+  const sessions = s.sessions.map((x) => ({ ...x, runId: x.runId ?? x.id, tier: migrateTier(x.tier) }));
   return {
     ...base,
     ...s,
@@ -57,9 +57,15 @@ export function normalize(raw: unknown): AppState {
     sessions,
     fatigue: Array.isArray(s.fatigue) ? s.fatigue : [],
     settings: { ...base.settings, ...(isObj(s.settings) ? s.settings : {}) },
-    hie: { ...base.hie, ...(isObj(s.hie) ? s.hie : {}) },
+    hie: { ...base.hie, ...(isObj(s.hie) ? s.hie : {}), tier: migrateTier(isObj(s.hie) ? s.hie.tier : undefined) },
     ui: { ...base.ui, ...(isObj(s.ui) ? s.ui : {}) },
   };
+}
+
+// Tier names changed from lite/core/deep to haiku/sonnet/opus.
+const TIER_ALIAS: Record<string, Tier> = { lite: 'haiku', core: 'sonnet', deep: 'opus', haiku: 'haiku', sonnet: 'sonnet', opus: 'opus' };
+function migrateTier(t: unknown): Tier {
+  return (typeof t === 'string' && TIER_ALIAS[t]) || 'sonnet';
 }
 
 export interface LoadResult {

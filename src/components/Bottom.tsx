@@ -2,9 +2,9 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import type { Output } from '../ctx';
 import { useApp } from '../ctx';
 import { matchCommands } from '../commands';
-import { activeSession, runSegmentsTokens, runStartedAt, TIERS, type BudgetLevel } from '../hie';
+import { activeSession, latestFatigue, runSegmentsTokens, runStartedAt, TIERS, type BudgetLevel } from '../hie';
 import { currentWs } from '../store';
-import { fmtDuration, fmtTokens } from '../util';
+import { bar, fmtDuration, fmtTokens } from '../util';
 
 export interface PromptHandle {
   focus: (prefill?: string) => void;
@@ -34,7 +34,7 @@ function SpinnerLine() {
       <span>{verb}…</span>
       <span className="dim">
         ({fmtDuration(elapsed)} / {s.plannedMin}m · ↑ {fmtTokens(runSegmentsTokens(state, s.runId))} tokens · {TIERS[s.tier].label}/{s.effort}
-        {s.intent ? ` · ${s.intent}` : ''} · <span className="kbd">f</span> 结束)
+        <span className="hide-sm">{s.intent ? ` · ${s.intent}` : ''}</span> · <span className="kbd">f</span> 结束)
       </span>
       {over && <span className="yellow">已超过计划时长，考虑休息或 /end</span>}
     </div>
@@ -45,9 +45,11 @@ export const Bottom = forwardRef<PromptHandle, {
   output: Output | null;
   onRun: (s: string) => void;
   onUndo: () => void;
+  onToggleMode: () => void;
   budgetLevel: BudgetLevel;
   used: number;
-}>(function Bottom({ output, onRun, onUndo, budgetLevel, used }, ref) {
+  advice: string | null;
+}>(function Bottom({ output, onRun, onUndo, onToggleMode, budgetLevel, used, advice }, ref) {
   const { state, store, open } = useApp();
   const [v, setV] = useState('');
   const [sugIdx, setSugIdx] = useState(0);
@@ -154,6 +156,7 @@ export const Bottom = forwardRef<PromptHandle, {
       ? '添加任务…　/ 命令　# 记录'
       : '添加行动…　/ 命令　# 记录';
 
+  const fat = latestFatigue(state);
   const budgetLeft = Math.max(0, Math.round((1 - used / state.settings.dailyBudget) * 100));
 
   return (
@@ -217,17 +220,26 @@ export const Bottom = forwardRef<PromptHandle, {
         </div>
       </div>
       <div className="statusline">
-        <button className={mode === 'plan' ? 'mode-plan' : 'mode-goal'} onClick={() => store.mutate(null, (d) => void (d.ui.mode = d.ui.mode === 'plan' ? 'goal' : 'plan'))}>
-          {mode === 'plan' ? '⏸ plan mode on' : '⏵⏵ goal mode on'} <span className="faint">(shift+tab to cycle)</span>
+        <button className={mode === 'plan' ? 'mode-plan' : 'mode-goal'} onClick={onToggleMode} title="Shift+Tab">
+          {mode === 'plan' ? '⏸ plan mode on' : '⏵⏵ goal mode on'} <span className="faint hide-sm">(shift+tab to cycle)</span>
         </button>
-        <button onClick={() => open({ type: 'help' })}>? for shortcuts</button>
+        {advice ? <span className="yellow">{advice}</span> : <button className="faint" onClick={() => open({ type: 'help' })}>? for shortcuts</button>}
         <span className="spacer" />
-        {budgetLevel !== 'ok' && (
-          <span className={budgetLevel === 'warn' ? 'yellow' : 'red'}>
-            {budgetLevel === 'over' ? '今日预算已用完' : `Budget left until auto-compact: ${budgetLeft}%`}
-          </span>
-        )}
-        <span className="faint">{store.saveError() ? '✗ 未保存' : '● 已本地保存'}</span>
+        <button title={`模型档位：${TIERS[state.hie.tier].hint}（点击轮换 · /model）`} onClick={() => onRun('/model')}>
+          {TIERS[state.hie.tier].label}
+        </button>
+        <button title="推理强度（点击轮换 · /effort）" onClick={() => onRun('/effort')}>{state.hie.effort}</button>
+        <span
+          className={budgetLevel === 'ok' ? '' : budgetLevel === 'warn' ? 'yellow' : 'red'}
+          title={`今日 Cognitive Token：${used.toLocaleString()} / ${state.settings.dailyBudget.toLocaleString()}（/budget 修改）`}
+        >
+          <span className="meter">{bar(used / state.settings.dailyBudget, 6)}</span> {fmtTokens(used)}/{fmtTokens(state.settings.dailyBudget)}
+          {budgetLevel === 'low' && ` · ${budgetLeft}% left`}
+        </span>
+        <button title="疲劳自评 1–5（/fatigue）" onClick={() => (ta.current && (setV('/fatigue '), ta.current.focus()))}>
+          {fat ? `疲劳 ${fat}/5` : '疲劳 –'}
+        </button>
+        {store.saveError() && <span className="red">✗ 未保存</span>}
       </div>
     </footer>
   );

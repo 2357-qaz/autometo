@@ -11,8 +11,7 @@ import { seedDemo } from './demo';
 import { DialogHost } from './components/Dialogs';
 import { PlanView } from './components/PlanView';
 import { GoalView } from './components/GoalView';
-import { Sidebar } from './components/Sidebar';
-import { Topbar } from './components/Topbar';
+import { Header } from './components/Header';
 import { Bottom, type PromptHandle } from './components/Bottom';
 import { Welcome } from './components/Welcome';
 
@@ -29,7 +28,6 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [output, setOutput] = useState<Output | null>(null);
   const [sel, setSel] = useState<string | null>(null);
-  const [sideOpen, setSideOpen] = useState(false);
   const [loadErr, setLoadErr] = useState(loadError);
   const promptRef = useRef<PromptHandle>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -134,6 +132,13 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
     store.mutate(null, (d) => ops.selectWs(d, next.id));
   };
 
+  // Resume prompt: newest compact for this workspace saved before this page load.
+  const resumable = ws
+    ? [...state.compacts].reverse().find((c) => c.wsId === ws.id && c.at < OPENED_AT && c.id !== state.ui.dismissedCompactId)
+    : undefined;
+  const newestForWs = ws ? [...state.compacts].reverse().find((c) => c.wsId === ws.id) : undefined;
+  const showResume = resumable && newestForWs?.id === resumable.id;
+
   // Global keyboard.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -154,23 +159,28 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
         return;
       }
       if (isTyping(document.activeElement) || e.metaKey || e.ctrlKey || e.altKey) return;
-      const idx = sel ? ordered.findIndex((t) => t.id === sel) : -1;
-      const cur = idx >= 0 ? ordered[idx] : undefined;
+      // Navigate over what is actually on screen (collapsed items are skipped).
+      const visibleIds = Array.from(document.querySelectorAll<HTMLElement>('.main [data-task-id]')).map((el) => el.dataset.taskId!);
+      const visible = visibleIds.map((id) => ordered.find((t) => t.id === id)).filter((t): t is NonNullable<typeof t> => !!t);
+      const idx = sel ? visible.findIndex((t) => t.id === sel) : -1;
+      const cur = idx >= 0 ? visible[idx] : undefined;
       const k = e.key;
       const handled = () => e.preventDefault();
       if (k === '/') return handled(), focusPrompt('/');
       if (k === ':' || k === 'i') return handled(), focusPrompt('');
       if (k === '?') return handled(), setDialog({ type: 'help' });
       if (k === 'j' || k === 'ArrowDown') {
-        if (!ordered.length) return;
+        if (!visible.length) return;
         handled();
-        return setSel(ordered[Math.min(ordered.length - 1, idx + 1)].id);
+        return setSel(visible[Math.min(visible.length - 1, idx + 1)].id);
       }
       if (k === 'k' || k === 'ArrowUp') {
-        if (!ordered.length) return;
+        if (!visible.length) return;
         handled();
-        return setSel(ordered[Math.max(0, idx < 0 ? 0 : idx - 1)].id);
+        return setSel(visible[Math.max(0, idx < 0 ? 0 : idx - 1)].id);
       }
+      if (k === 'o') return handled(), setDialog({ type: 'switch' });
+      if (k === 'r' && showResume && resumable) return handled(), setDialog({ type: 'resume', compactId: resumable.id });
       if (k === '[') return handled(), cycleWs(-1);
       if (k === ']') return handled(), cycleWs(1);
       if (k === 'n') return handled(), setDialog({ type: state.ui.mode === 'plan' ? 'newPlan' : 'newGoal' });
@@ -191,7 +201,7 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
       if (k === 'K') return handled(), act('移动任务', (d) => ops.moveTask(d, cur.id, -1));
       if (k === 'x' || k === 'Delete' || k === 'Backspace') {
         handled();
-        const nb = ordered[idx + 1] ?? ordered[idx - 1];
+        const nb = visible[idx + 1] ?? visible[idx - 1];
         act('删除任务', (d) => ops.deleteTask(d, cur.id));
         setSel(nb?.id ?? null);
       }
@@ -200,13 +210,6 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  // Resume prompt: newest compact for this workspace saved before this page load.
-  const resumable = ws
-    ? [...state.compacts].reverse().find((c) => c.wsId === ws.id && c.at < OPENED_AT && c.id !== state.ui.dismissedCompactId)
-    : undefined;
-  const newestForWs = ws ? [...state.compacts].reverse().find((c) => c.wsId === ws.id) : undefined;
-  const showResume = resumable && newestForWs?.id === resumable.id;
-
   const used = tokensToday(state);
   const advice = hieAdvice(used, state.settings.dailyBudget, latestFatigue(state));
   const saveErr = store.saveError();
@@ -214,54 +217,39 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
   return (
     <Ctx.Provider value={ctx}>
       <div className="app">
-        <Topbar onToggleSide={() => setSideOpen((v) => !v)} onToggleMode={toggleMode} run={run} />
-        <div className="body">
-          <Sidebar open={sideOpen} onPick={() => setSideOpen(false)} />
-          <main className="main" onClick={() => sideOpen && setSideOpen(false)}>
-            {loadErr && (
-              <div className="banner err" role="alert">
-                <span>✗</span>
-                <div className="grow">{loadErr}</div>
-                <button className="btn" onClick={() => setLoadErr(null)}>知道了</button>
-              </div>
-            )}
-            {saveErr && (
-              <div className="banner err" role="alert">
-                <span>✗</span>
-                <div className="grow">{saveErr}。建议立即 /export 导出备份。</div>
-                <button className="btn" onClick={exportData}>导出备份</button>
-              </div>
-            )}
-            {showResume && resumable && (
-              <div className="banner resume" role="region" aria-label="恢复上下文">
-                <span className="blue">↻</span>
-                <div className="grow">
-                  <div>
-                    欢迎回来。上次在「{ws!.title}」留下了快照 <span className="dim">· {fmtAgo(resumable.at)}</span>
-                  </div>
-                  <pre>{resumable.text.split('\n').slice(2, 14).join('\n')}</pre>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <button className="btn primary" onClick={() => setDialog({ type: 'resume', compactId: resumable.id })}>Resume</button>
-                  <button className="btn ghost" onClick={() => store.mutate(null, (d) => void (d.ui.dismissedCompactId = resumable.id))}>忽略</button>
-                </div>
-              </div>
-            )}
-            {advice && ws && (
-              <div className="banner advice" role="status">
-                <span className="yellow">!</span>
-                <div className="grow">{advice}</div>
-              </div>
-            )}
-            {!ws ? (
-              <Welcome mode={state.ui.mode} onDemo={() => act('载入示例', (d) => void seedDemo(d))} />
-            ) : ws.kind === 'plan' ? (
-              <PlanView plan={ws} selTaskId={sel} setSel={setSel} />
-            ) : (
-              <GoalView goal={ws} selTaskId={sel} setSel={setSel} />
-            )}
-          </main>
-        </div>
+        <main className="main">
+          <Header />
+          {loadErr && (
+            <div className="notice err" role="alert">
+              <span>✗ {loadErr}</span>
+              <button className="link" onClick={() => setLoadErr(null)}>知道了</button>
+            </div>
+          )}
+          {saveErr && (
+            <div className="notice err" role="alert">
+              <span>✗ {saveErr}。建议立即导出备份。</span>
+              <button className="link" onClick={exportData}>导出备份</button>
+            </div>
+          )}
+          {showResume && resumable && (
+            <div className="notice resume" role="region" aria-label="恢复上下文">
+              <span>
+                <span className="blue">↻</span> 上次在这里留下了快照 <span className="faint">· {fmtAgo(resumable.at)}</span>
+              </span>
+              <button className="link blue" onClick={() => setDialog({ type: 'resume', compactId: resumable.id })}>
+                Resume <span className="kbd">r</span>
+              </button>
+              <button className="link faint" onClick={() => store.mutate(null, (d) => void (d.ui.dismissedCompactId = resumable.id))}>忽略</button>
+            </div>
+          )}
+          {!ws ? (
+            <Welcome mode={state.ui.mode} onDemo={() => act('载入示例', (d) => void seedDemo(d))} />
+          ) : ws.kind === 'plan' ? (
+            <PlanView plan={ws} selTaskId={sel} setSel={setSel} />
+          ) : (
+            <GoalView goal={ws} selTaskId={sel} setSel={setSel} />
+          )}
+        </main>
         <Bottom
           ref={promptRef}
           output={output}
@@ -270,8 +258,10 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
             const l = store.undo();
             say(l ? { cmd: 'undo', text: `已撤销：${l}` } : { cmd: 'undo', text: '没有可撤销的操作', error: true });
           }}
+          onToggleMode={toggleMode}
           budgetLevel={budgetLevel(used, state.settings.dailyBudget)}
           used={used}
+          advice={ws ? advice : null}
         />
         <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={onFile} />
         {dialog && <DialogHost key={JSON.stringify({ ...dialog, onConfirm: undefined })} dialog={dialog} />}

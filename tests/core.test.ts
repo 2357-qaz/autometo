@@ -93,18 +93,18 @@ describe('goal checkpoints', () => {
 
 describe('HIE', () => {
   it('estimates tokens by tier × effort', () => {
-    expect(estimateTokens('core', 'medium', 60)).toBe(48_000);
-    expect(estimateTokens('deep', 'high', 60)).toBe(135_000);
-    expect(estimateTokens('lite', 'low', 10)).toBe(2400);
+    expect(estimateTokens('sonnet', 'medium', 60)).toBe(48_000);
+    expect(estimateTokens('opus', 'high', 60)).toBe(135_000);
+    expect(estimateTokens('haiku', 'low', 10)).toBe(2400);
   });
 
   it('accumulates session tokens across a tier switch', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-09T10:00:00'));
     const d = emptyState();
-    ops.startSession(d, { intent: '', plannedMin: 30, tier: 'core', effort: 'medium' });
+    ops.startSession(d, { intent: '', plannedMin: 30, tier: 'sonnet', effort: 'medium' });
     vi.setSystemTime(new Date('2026-10-09T10:10:00'));
-    ops.setTier(d, 'deep');
+    ops.setTier(d, 'opus');
     vi.setSystemTime(new Date('2026-10-09T10:20:00'));
     expect(tokensToday(d)).toBe(8000 + 15000);
     const msg = ops.endSession(d, { fatigue: 3 });
@@ -142,5 +142,16 @@ describe('compact & persistence', () => {
     expect(back.plans[0].tasks.length).toBe(d.plans[0].tasks.length);
     expect(() => normalize({ version: 2 })).toThrow(/版本/);
     expect(() => normalize([])).toThrow();
+  });
+});
+
+describe('migration', () => {
+  it('maps legacy tier names to haiku/sonnet/opus', () => {
+    const d = emptyState();
+    const raw = JSON.parse(JSON.stringify({ ...d, hie: { tier: 'deep', effort: 'high' }, sessions: [{ id: 's', tier: 'lite', effort: 'low', startedAt: 0, endedAt: 1, plannedMin: 25, intent: '', wsId: null }] }));
+    const n = normalize(raw);
+    expect(n.hie.tier).toBe('opus');
+    expect(n.sessions[0].tier).toBe('haiku');
+    expect(n.sessions[0].runId).toBe('s');
   });
 });

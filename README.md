@@ -15,6 +15,15 @@ npm run build      # 产物在 dist/，纯静态，可直接部署
 
 数据只保存在浏览器 localStorage（键 `automedo.v0`），可通过 `/export`、`/import` 备份与恢复。
 
+## 界面
+
+单栏、终端式，只突出两件事：
+
+1. **当前任务**（顶部高亮块）——正在做什么、做完之后是什么，以及「完成并继续 / 专注 / 卡住了」。Goal 模式下是「下一步」。
+2. **接下来的 Todo**——当前阶段的待办；后续阶段变暗显示，已完成项折叠成一行。
+
+阶段管理、日志、Checkpoint 历史、目标详情都收在底部的折叠区里。Plan/Goal 列表用 `o`（或点标题）打开；HIE 档位、强度、预算和疲劳都在底部状态行。
+
 ## 两种模式（Shift+Tab 切换）
 
 | | Plan Mode ⏸ | Goal Mode ⏵⏵ |
@@ -28,7 +37,7 @@ npm run build      # 产物在 dist/，纯静态，可直接部署
 
 两种模式共用的投入管理隐喻：
 
-- **模型档位** `/model lite|core|deep` — 400 / 800 / 1500 tokens·min⁻¹
+- **模型档位** `/model haiku|sonnet|opus` — 400 / 800 / 1500 tokens·min⁻¹
 - **推理强度** `/effort low|medium|high` — ×0.6 / ×1 / ×1.5
 - **专注 Session** `/session`、`/end` — 计时并按档位累计 Token；中途切档会分段计费
 - **每日预算** `/budget 200k` — 顶栏额度条；剩余 40% / 15% 时变色并建议 `/compact`
@@ -42,7 +51,7 @@ npm run build      # 产物在 dist/，纯静态，可直接部署
 
 ## 键盘
 
-`/` 命令行（带补全）· `Shift+Tab` 切换模式 · `j/k` 选择任务 · `Space` 切换状态 · `s/d/b` 开始/完成/阻塞 · `e` 编辑 · `x` 删除 · `J/K` 移动 · `[ ]` 切换 Plan/Goal · `n` 新建 · `f` Session · `c` Compact · `Ctrl+Z` 撤销 · `?` 帮助
+`/` 命令行（带补全）· `Shift+Tab` 切换模式 · `o` 打开 Plan/Goal 列表 · `r` Resume · `j/k` 选择任务 · `Space` 切换状态 · `s/d/b` 开始/完成/阻塞 · `e` 编辑 · `x` 删除 · `J/K` 移动 · `[ ]` 切换 Plan/Goal · `n` 新建 · `f` Session · `c` Compact · `Ctrl+Z` 撤销 · `?` 帮助
 
 命令行里直接输入文字 = 添加任务/行动；`#` 开头 = 写日志。所有操作也都可以用鼠标完成。
 
