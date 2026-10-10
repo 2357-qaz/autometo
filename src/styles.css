@@ -435,7 +435,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .seg.inline button small { margin-left: 0.3em; }
 
 /* ───────── text controls ───────── */
-.ascii-slider { display: inline-flex; gap: 12px; align-items: baseline; cursor: pointer; user-select: none; padding: 2px 0; }
+.ascii-slider { display: inline-flex; gap: 12px; align-items: baseline; cursor: pointer; user-select: none; touch-action: none; padding: 6px 0; min-height: 32px; }
 .ascii-slider:focus-visible { outline: none; }
 .ascii-slider:focus-visible .as-bar { background: var(--accent-soft); }
 .as-bar { letter-spacing: -1px; font-size: 15px; }
