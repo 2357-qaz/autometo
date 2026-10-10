@@ -126,7 +126,7 @@ function PlanHead({ plan, sel, setSel, onDiff }: { plan: Plan; sel: string | nul
                                 ? open({
                                     type: 'confirm',
                                     title: `删除阶段「${ph.title}」？`,
-                                    message: `其中的 ${ts.length} 个任务也会被删除。可以 Ctrl+Z 撤销。`,
+                                    message: `其中的 ${ts.length} 个任务也会被删除。可以撤销。`,
                                     confirmLabel: '删除',
                                     danger: true,
                                     onConfirm: () => act('删除阶段', (d) => ops.deletePhase(d, ph.id)),
@@ -144,7 +144,7 @@ function PlanHead({ plan, sel, setSel, onDiff }: { plan: Plan; sel: string | nul
                     </div>
                   );
                 })}
-                <AddRow placeholder="+ 新增阶段，回车确认" onAdd={(v) => act('新增阶段', (d) => ops.addPhase(d, v))} />
+                <AddRow placeholder="+ 新增阶段" onAdd={(v) => act('新增阶段', (d) => ops.addPhase(d, v))} />
               </>
             ),
           },

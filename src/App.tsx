@@ -81,7 +81,7 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
     setDialog({
       type: 'confirm',
       title: `导入「${f.name}」？`,
-      message: `将用备份中的 ${next.plans.length} 个 Plan、${next.goals.length} 个 Goal 覆盖当前数据。之后可以 Ctrl+Z 撤销；建议先 /export 当前数据。`,
+      message: `将用备份中的 ${next.plans.length} 个 Plan、${next.goals.length} 个 Goal 覆盖当前数据。之后可以撤销；建议先 /export 当前数据。`,
       confirmLabel: '覆盖导入',
       danger: true,
       onConfirm: () => {
@@ -255,7 +255,7 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
                 <span className="blue">↻</span> 上次在这里留下了快照 <span className="faint">· {fmtAgo(resumable.at)}</span>
               </span>
               <button className="link blue" onClick={() => setDialog({ type: 'resume', compactId: resumable.id })}>
-                Resume <span className="kbd">r</span>
+                Resume
               </button>
               <button className="link faint" onClick={() => store.mutate(null, (d) => void (d.ui.dismissedCompactId = resumable.id))}>忽略</button>
             </div>

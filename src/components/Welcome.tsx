@@ -1,35 +1,37 @@
 import type { Mode } from '../types';
 import { useApp } from '../ctx';
+import { Mascot } from './Mascot';
 
 export function Welcome({ mode, onDemo }: { mode: Mode; onDemo: () => void }) {
   const { open, state } = useApp();
   const empty = !state.plans.length && !state.goals.length;
+  const hasAny = !empty;
   return (
     <div className="col">
       <div className="welcome">
-        <div>
-          <span className="accent">✻</span> <span className="bold">Welcome to AuTomeDo</span>
+        <Mascot px={7} />
+        <div className="welcome-text">
+          <div>
+            <span className="accent">✻</span> <span className="bold">Welcome to AuTomeDo</span>
+          </div>
+          <div className="fg-2" style={{ marginTop: 6 }}>嗨，我是 Tomo，你的计划本。</div>
+          <div className="dim">像编写 Agent 计划一样组织自己的工作：先写下要做的事，然后一件一件推进。</div>
         </div>
-        <div className="dim" style={{ marginTop: 6 }}>像编写 Agent 计划一样组织自己的工作。</div>
       </div>
       <div className="tips">
         <div className="dim">Tips for getting started:</div>
         <ol>
+          <li>直接在下方输入{mode === 'plan' ? '计划' : '目标'}标题并回车，就能开始</li>
           <li>
-            {mode === 'plan' ? '路径清楚？' : '路径还不清楚？'}直接在下方输入{mode === 'plan' ? '计划' : '目标'}标题并回车
-            {state.plans.length + state.goals.length > 0 && <>，或按 <span className="kbd">o</span> 打开已有的</>}
+            <span className="teal">Plan</span> 适合路径清楚的事（先想再做），<span className="violet">Goal</span> 适合还在摸索的事（先干起来再想）
           </li>
-          <li>
-            <span className="kbd">shift+tab</span> 在 <span className="teal">plan mode</span>（先想再做）和 <span className="violet">goal mode</span>（先干起来再想）间切换
-          </li>
-          <li>
-            输入 <span className="kbd">/</span> 查看命令，<span className="kbd">?</span> 查看快捷键
-          </li>
+          <li>输入 / 可以看到所有命令</li>
         </ol>
         <div className="row-btns">
           <button className="btn primary" onClick={() => open({ type: mode === 'plan' ? 'newPlan' : 'newGoal' })}>
             + 新建 {mode === 'plan' ? 'Plan' : 'Goal'}
           </button>
+          {hasAny && <button className="btn" onClick={() => open({ type: 'switch' })}>打开已有的</button>}
           {empty && <button className="btn" onClick={onDemo}>载入示例数据</button>}
         </div>
       </div>

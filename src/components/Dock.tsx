@@ -4,6 +4,7 @@ import { useApp } from '../ctx';
 import { activeSession } from '../hie';
 import * as ops from '../ops';
 import { TaskRow } from './TaskRow';
+import { Mascot } from './Mascot';
 
 const MAX = 5;
 
@@ -58,6 +59,7 @@ export function Dock({ ws, sel, setSel }: { ws: Workspace; sel: string | null; s
     </div>
   ) : ordered.length ? (
     <div className="dock-active idle">
+      <Mascot px={2} title="Tomo：全部完成！" />
       <span className="green">✓</span>
       <span>全部完成</span>
       <span className="dock-btns">

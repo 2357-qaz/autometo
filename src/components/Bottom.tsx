@@ -14,7 +14,7 @@ const GLYPHS = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '�
 const VERBS = ['Focusing', 'Crafting', 'Pondering', 'Tinkering', 'Grinding', 'Building', 'Untangling', 'Noodling'];
 
 function SpinnerLine() {
-  const { state } = useApp();
+  const { state, run } = useApp();
   const s = activeSession(state);
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -34,9 +34,10 @@ function SpinnerLine() {
       <span>{verb}…</span>
       <span className="dim">
         ({fmtDuration(elapsed)} / {s.plannedMin}m · ↑ {fmtTokens(runSegmentsTokens(state, s.runId))} tokens · {TIERS[s.tier].label}/{s.effort}
-        <span className="hide-sm">{s.intent ? ` · ${s.intent}` : ''}</span> · <span className="kbd">f</span> 结束)
+        <span className="hide-sm">{s.intent ? ` · ${s.intent}` : ''}</span>)
       </span>
-      {over && <span className="yellow">已超过计划时长，考虑休息或 /end</span>}
+      {over && <span className="yellow">已超过计划时长</span>}
+      <button className="link" title="结束 Session（f）" onClick={() => run('/end')}>结束</button>
     </div>
   );
 }
@@ -170,8 +171,8 @@ export const Bottom = forwardRef<PromptHandle, {
           <span className="res">
             {output.text}
             {output.undoable && store.canUndo() && (
-              <button className="btn ghost" onClick={onUndo}>
-                撤销 <span className="kbd">Ctrl+Z</span>
+              <button className="link" title="Ctrl+Z" onClick={onUndo}>
+                撤销
               </button>
             )}
           </span>
@@ -222,15 +223,15 @@ export const Bottom = forwardRef<PromptHandle, {
         </div>
       </div>
       <div className="statusline">
-        <button className={mode === 'plan' ? 'mode-plan' : 'mode-goal'} onClick={onToggleMode} title="Shift+Tab">
-          {mode === 'plan' ? '⏸ plan mode on' : '⏵⏵ goal mode on'} <span className="faint hide-sm">(shift+tab to cycle)</span>
+        <button className={`chip ${mode === 'plan' ? 'mode-plan' : 'mode-goal'}`} onClick={onToggleMode} title="切换 Plan / Goal 模式（Shift+Tab）">
+          {mode === 'plan' ? '⏸ plan mode on' : '⏵⏵ goal mode on'}
         </button>
-        {advice ? <span className="yellow">{advice}</span> : <button className="faint" onClick={() => open({ type: 'help' })}>? for shortcuts</button>}
+        {advice ? <span className="yellow">{advice}</span> : <button className="chip" onClick={() => open({ type: 'help' })}>? 帮助</button>}
         <span className="spacer" />
-        <button title={`模型档位：${TIERS[state.hie.tier].hint}（点击轮换 · /model）`} onClick={() => onRun('/model')}>
+        <button className="chip" title={`模型档位：${TIERS[state.hie.tier].hint}（点击轮换 · /model）`} onClick={() => onRun('/model')}>
           {TIERS[state.hie.tier].label}
         </button>
-        <button title="推理强度（点击轮换 · /effort）" onClick={() => onRun('/effort')}>{state.hie.effort}</button>
+        <button className="chip" title="推理强度（点击轮换 · /effort）" onClick={() => onRun('/effort')}>{state.hie.effort}</button>
         <span
           className={budgetLevel === 'ok' ? '' : budgetLevel === 'warn' ? 'yellow' : 'red'}
           title={`今日 Cognitive Token：${used.toLocaleString()} / ${state.settings.dailyBudget.toLocaleString()}（/budget 修改）`}
@@ -238,7 +239,7 @@ export const Bottom = forwardRef<PromptHandle, {
           <span className="meter">{bar(used / state.settings.dailyBudget, 6)}</span> {fmtTokens(used)}/{fmtTokens(state.settings.dailyBudget)}
           {budgetLevel === 'low' && ` · ${budgetLeft}% left`}
         </span>
-        <button title="疲劳自评 1–5（/fatigue）" onClick={() => (ta.current && (setV('/fatigue '), ta.current.focus()))}>
+        <button className="chip" title="疲劳自评 1–5（/fatigue）" onClick={() => (ta.current && (setV('/fatigue '), ta.current.focus()))}>
           {fat ? `疲劳 ${fat}/5` : '疲劳 –'}
         </button>
         {store.saveError() && <span className="red">✗ 未保存</span>}

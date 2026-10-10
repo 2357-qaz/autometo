@@ -45,9 +45,6 @@ function Shell(props: { title: ReactNode; desc?: ReactNode; wide?: boolean; onSu
           {props.children}
           {props.error && <div className="form-err">⎿ {props.error}</div>}
           <div className="dialog-actions">
-            <span className="hint">
-              <span className="kbd">Esc</span> 取消{props.onSubmit && <> · <span className="kbd">Ctrl</span>+<span className="kbd">Enter</span> 确认</>}
-            </span>
             {props.actions}
             <button type="button" className="btn" onClick={close}>取消</button>
             {props.onSubmit && (
@@ -221,8 +218,8 @@ function StartSession({ minutes }: { minutes?: number }) {
         <div className="field">
           <span>预计消耗</span>
           <div>
-            ≈ <span className="accent">{fmtTokens(est)}</span> tokens　
-            <span className={est > left ? 'red' : 'dim'}>今日剩余 {fmtTokens(Math.max(0, left))}{est > left ? ' · 将超出预算' : ''}</span>
+            ≈ <span className="accent">{fmtTokens(est)}</span> tokens
+            <span className={est > left ? 'red' : 'dim'} style={{ marginLeft: 12 }}>今日剩余 {fmtTokens(Math.max(0, left))}{est > left ? ' · 将超出预算' : ''}</span>
           </div>
         </div>
       </div>
