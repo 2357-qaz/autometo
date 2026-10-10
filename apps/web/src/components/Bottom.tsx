@@ -231,11 +231,11 @@ export const Bottom = forwardRef<PromptHandle, {
         </button>
         {advice ? <span className="yellow">{advice}</span> : <button className="sl faint" onClick={() => open({ type: 'help' })}>? for shortcuts</button>}
         <span className="spacer" />
-        <button className="sl" title={`模型档位：${TIERS[state.hie.tier].hint}（点击切换）`} onClick={() => onRun('/model')}>
+        <button className="sl" title={`模型档位：${TIERS[state.hie.tier].hint}（点击选择）`} onClick={() => onRun('/model')}>
           <TierLabel tier={state.hie.tier} />
         </button>
         <span className="sep">·</span>
-        <button className="sl" title="推理强度（点击切换）" onClick={() => onRun('/effort')}>
+        <button className="sl" title="推理强度（点击选择）" onClick={() => onRun('/effort')}>
           <EffortLabel effort={state.hie.effort} />
         </button>
         <span className="sep">·</span>
@@ -247,7 +247,7 @@ export const Bottom = forwardRef<PromptHandle, {
           {budgetLevel === 'low' && ` · ${budgetLeft}% left`}
         </span>
         <span className="sep">·</span>
-        <button className={`sl ${fat && fat >= 4 ? 'yellow' : 'dim'}`} title="疲劳自评 1–5（点击填写）：越累 token 越贵，×1 / ×1.25 / ×2 / ×4 / ×8" onClick={() => (ta.current && (setV('/fatigue '), ta.current.focus()))}>
+        <button className={`sl ${fat && fat >= 4 ? 'yellow' : 'dim'}`} title="疲劳自评 1–5（点击填写）：越累 token 越贵，×1 / ×1.25 / ×2 / ×4 / ×8" onClick={() => onRun('/fatigue')}>
           {fat ? `疲劳 ${fat}/5${fatigueMult(fat) > 1 ? ` ×${fatigueMult(fat)}` : ''}` : '疲劳 –'}
         </button>
         <span className="sep">·</span>

@@ -15,4 +15,6 @@ export type Intent =
   | { type: 'help' }
   | { type: 'sync' }
   | { type: 'switch' }
+  /** Pick one value (model tier, effort, fatigue) — see pickSpec. */
+  | { type: 'pick'; what: import('./picks').PickKind }
   | { type: 'confirm'; title: string; message: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void };

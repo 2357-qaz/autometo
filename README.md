@@ -81,7 +81,7 @@ AUTOMEDO_TOKEN=$(openssl rand -base64 32) AUTOMEDO_WEB_DIR=apps/web/dist npm run
 
 两种模式共用的投入管理隐喻：
 
-- **模型档位** `/model haiku|sonnet|opus` — 400 / 800 / 1500 tokens·min⁻¹
+- **模型档位** `/model haiku|sonnet|opus` — 400 / 800 / 1500 tokens·min⁻¹；`/model`、`/effort`、`/fatigue` 不带参数时弹出选择（终端里在底栏原地 ←→ 选择、回车确认）
 - **推理强度** `/effort low|medium|high` — ×0.6 / ×1 / ×1.5
 - **专注 Session** `/session`、`/end` — 计时并按档位累计 Token；中途切档会分段计费
 - **每日预算** `/budget 200k` — 顶栏额度条；剩余 40% / 15% 时变色并建议 `/compact`

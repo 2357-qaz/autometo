@@ -199,10 +199,10 @@ export const COMMANDS: Command[] = [
   {
     name: 'model',
     args: '[haiku|sonnet|opus]',
-    desc: '切换模型档位（不带参数则轮换）',
+    desc: '切换模型档位（不带参数则弹出选择）',
     run: (a, c) => {
-      const s = c.store.get();
-      const t = (a.trim().toLowerCase() || TIER_ORDER[(TIER_ORDER.indexOf(s.hie.tier) + 1) % 3]) as Tier;
+      if (!a.trim()) return void c.open({ type: 'pick', what: 'tier' });
+      const t = a.trim().toLowerCase() as Tier;
       if (!TIER_ORDER.includes(t)) return { text: `未知档位「${a}」。可选：haiku / sonnet / opus`, error: true };
       return mut(c, '切换档位', (d) => ops.setTier(d, t));
     },
@@ -210,15 +210,20 @@ export const COMMANDS: Command[] = [
   {
     name: 'effort',
     args: '[low|medium|high]',
-    desc: '切换推理强度（不带参数则轮换）',
+    desc: '切换推理强度（不带参数则弹出选择）',
     run: (a, c) => {
-      const s = c.store.get();
-      const e = (a.trim().toLowerCase() || EFFORT_ORDER[(EFFORT_ORDER.indexOf(s.hie.effort) + 1) % 3]) as Effort;
+      if (!a.trim()) return void c.open({ type: 'pick', what: 'effort' });
+      const e = a.trim().toLowerCase() as Effort;
       if (!EFFORT_ORDER.includes(e)) return { text: `未知强度「${a}」。可选：low / medium / high`, error: true };
       return mut(c, '切换强度', (d) => ops.setEffort(d, e));
     },
   },
-  { name: 'fatigue', args: '<1-5>', desc: '疲劳自评（1 精力充沛 · 5 需要休息；越累 token 越贵）', run: (a, c) => mut(c, '疲劳自评', (d) => ops.markFatigue(d, Number(a))) },
+  {
+    name: 'fatigue',
+    args: '[1-5]',
+    desc: '疲劳自评（1 精力充沛 · 5 需要休息；越累 token 越贵；不带参数则弹出选择）',
+    run: (a, c) => (a.trim() ? mut(c, '疲劳自评', (d) => ops.markFatigue(d, Number(a))) : void c.open({ type: 'pick', what: 'fatigue' })),
+  },
   { name: 'budget', args: '<数量>', desc: '设置每日 Token 预算，如 /budget 150k', run: (a, c) => mut(c, '设置预算', (d) => ops.setBudget(d, ops.parseTokenAmount(a))) },
   {
     name: 'compact',

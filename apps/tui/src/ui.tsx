@@ -9,6 +9,8 @@ import { join } from 'node:path';
 import {
   activeSession,
   budgetLevel,
+  pickSpec,
+  type PickKind,
   COMMANDS,
   currentWs,
   execute,
@@ -25,6 +27,8 @@ import {
   tokensToday,
   fmtDuration,
   type AppState,
+  type Effort,
+  type Tier,
   type CmdCtx,
   type Intent,
   type Store,
@@ -117,14 +121,59 @@ function Spinner({ state }: { state: AppState }) {
 
 // ───────────────────────── status line ─────────────────────────
 
-function StatusLine({ state, sync, notice }: { state: AppState; sync: SyncClient; notice: string | null }) {
+type ConfirmIntent = Extract<Intent, { type: 'confirm' }>;
+/** A choice made in place, in the bottom bar (instead of a form above). */
+type Bar = { kind: 'pick'; what: PickKind; idx: number } | { kind: 'confirm'; intent: ConfirmIntent };
+
+const PREVIEW_BG = '#3a3f4b';
+const PICK_CMDS: Record<string, PickKind> = { model: 'tier', effort: 'effort', fatigue: 'fatigue' };
+
+/** The prompt box while a bar choice is open: the options in a row, the current one bracketed. */
+function BarLine({ bar, state }: { bar: Bar; state: AppState }) {
+  if (bar.kind === 'confirm') {
+    const i = bar.intent;
+    return (
+      <Text>
+        <Text color={i.danger ? C.red : C.accent} bold>
+          {i.title}
+        </Text>
+        <Text color={C.dim}>  {i.message}</Text>
+      </Text>
+    );
+  }
+  const spec = pickSpec(bar.what, state);
+  const o = spec.options[bar.idx];
+  return (
+    <Text>
+      <Text color={C.dim}>{spec.title}  </Text>
+      {spec.options.map((x, k) => (
+        <Text key={x.value}>
+          {k === bar.idx ? (
+            <Text color={C.accent} bold>
+              ‹ {x.label} ›
+            </Text>
+          ) : (
+            <Text color={k === spec.current ? C.fg2 : C.faint}>  {x.label}  </Text>
+          )}
+          <Text> </Text>
+        </Text>
+      ))}
+      <Text color={C.dim}>  {o.hint}</Text>
+    </Text>
+  );
+}
+
+function StatusLine({ state, sync, notice, preview, keys }: { state: AppState; sync: SyncClient; notice: string | null; preview?: { what: PickKind; value: string }; keys?: string }) {
   const st = useSync(sync);
   const cols = (useStdout().stdout as NodeJS.WriteStream).columns ?? 100;
   const used = tokensToday(state);
   const budget = state.settings.dailyBudget;
   const lvl = budgetLevel(used, budget);
-  const fat = latestFatigue(state);
-  const advice = currentWs(state) ? hieAdvice(used, budget, fat) : null;
+  const fat = preview?.what === 'fatigue' ? Number(preview.value) : latestFatigue(state);
+  const tier = preview?.what === 'tier' ? (preview.value as Tier) : state.hie.tier;
+  const effort = preview?.what === 'effort' ? (preview.value as Effort) : state.hie.effort;
+  const hl = (what: PickKind, segs: Seg[]) => (preview?.what === what ? segs.map((x) => ({ ...x, bg: PREVIEW_BG })) : segs);
+  const advice = currentWs(state) ? hieAdvice(used, budget, latestFatigue(state)) : null; // real values, not the preview
   const syncSeg: Seg =
     st.phase === 'off' ? { t: '本地', c: C.faint }
     : st.phase === 'syncing' ? { t: '⟳ 同步中', c: C.blue }
@@ -137,7 +186,7 @@ function StatusLine({ state, sync, notice }: { state: AppState; sync: SyncClient
     { t: bar(used / budget, 6), c: lvl === 'ok' ? C.dim : lvl === 'warn' ? C.yellow : C.red },
     { t: ` ${fmtTokens(used)}/${fmtTokens(budget)}`, c: lvl === 'ok' ? C.dim : lvl === 'warn' ? C.yellow : C.red },
   ];
-  const fatigueSeg: Seg = { t: fat ? `疲劳 ${fat}/5${fatigueMult(fat) > 1 ? ` ×${fatigueMult(fat)}` : ''}` : '疲劳 –', c: fat && fat >= 4 ? C.yellow : C.dim };
+  const fatigueSeg0: Seg = { t: fat ? `疲劳 ${fat}/5${fatigueMult(fat) > 1 ? ` ×${fatigueMult(fat)}` : ''}` : '疲劳 –', c: fat && fat >= 4 ? C.yellow : C.dim };
   const join = (groups: Seg[][]) => groups.flatMap((g, i) => (i ? [dot, ...g] : g));
   const mode = state.ui.mode;
   const message = notice ?? advice;
@@ -152,8 +201,8 @@ function StatusLine({ state, sync, notice }: { state: AppState; sync: SyncClient
   ];
   const build = (v: (typeof variants)[number]) => ({
     v,
-    right: join([tierSegs(state.hie.tier), effortSegs(state.hie.effort), ...(v.budget ? [budgetSegs] : []), [fatigueSeg], [syncSeg]]),
-    left: displayWidth(modeText) + (v.tab ? 12 : 0) + (v.help ? 17 : 0),
+    right: join([hl('tier', tierSegs(tier)), hl('effort', effortSegs(effort)), ...(v.budget ? [budgetSegs] : []), hl('fatigue', [fatigueSeg0]), [syncSeg]]),
+    left: displayWidth(modeText) + (keys ? 2 + displayWidth(keys) : (v.tab ? 12 : 0) + (v.help ? 17 : 0)),
   });
   const fit = variants.map(build).find((x) => x.left + 2 + width(x.right) + 2 <= cols) ?? build(variants[variants.length - 1]);
   const shown = fit.right;
@@ -169,8 +218,14 @@ function StatusLine({ state, sync, notice }: { state: AppState; sync: SyncClient
       <Box justifyContent="space-between" paddingX={1}>
         <Text wrap="truncate-end">
           <Text color={mode === 'plan' ? C.teal : C.violet}>{modeText}</Text>
-          {fit.v.tab ? <Text color={C.faint}> (shift+tab)</Text> : null}
-          {fit.v.help ? <Text color={C.faint}>  ? for shortcuts</Text> : null}
+          {keys ? (
+            <Text color={C.accent}>  {keys}</Text>
+          ) : (
+            <>
+              {fit.v.tab ? <Text color={C.faint}> (shift+tab)</Text> : null}
+              {fit.v.help ? <Text color={C.faint}>  ? for shortcuts</Text> : null}
+            </>
+          )}
         </Text>
         <Text wrap="truncate-start">
           {shown.map((x, i) => (
@@ -477,6 +532,7 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
   const [histIdx, setHistIdx] = useState(-1);
   const [sugIdx, setSugIdx] = useState(0);
   const [intent, setIntent] = useState<Intent | null>(null);
+  const [bar, setBar] = useState<Bar | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const ctrlC = useRef(0);
   const ws = currentWs(state);
@@ -511,6 +567,14 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
         d.ui.dismissedCompactId = c.id;
       });
       return print([[], [{ t: '⏺ ', c: C.blue }, { t: 'Resume', b: true }, { t: `  ${fmtAgo(c.at)}`, c: C.faint }], ...c.text.split('\n').map((l) => [{ t: '     ' + l, c: C.fg2 }])]);
+    }
+    if (i.type === 'pick') {
+      setIntent(null);
+      return setBar({ kind: 'pick', what: i.what, idx: Math.max(0, pickSpec(i.what, store.get()).current) });
+    }
+    if (i.type === 'confirm') {
+      setIntent(null);
+      return setBar({ kind: 'confirm', intent: i });
     }
     if (i.type !== 'switch' && !formFor(i, store, sync)) return print([[{ t: '  ⎿  无法打开这个表单', c: C.red }]]);
     setIntent(i);
@@ -579,6 +643,14 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
       }
       if (input === '?' && !line.value) return print(helpLines(COMMANDS));
       if (showSugs) {
+        const pickWhat = PICK_CMDS[sugs[sel]?.name ?? ''];
+        if (pickWhat && (key.leftArrow || key.rightArrow) && line.cursor === Array.from(line.value).length) {
+          const spec = pickSpec(pickWhat, store.get());
+          const n = spec.options.length;
+          const cur = Math.max(0, spec.current);
+          setLine(emptyLine);
+          return setBar({ kind: 'pick', what: pickWhat, idx: (cur + (key.leftArrow ? n - 1 : 1)) % n });
+        }
         if (key.upArrow) return setSugIdx((sel - 1 + sugs.length) % sugs.length);
         if (key.downArrow) return setSugIdx((sel + 1) % sugs.length);
         if (key.tab) {
@@ -623,7 +695,47 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
         setHistIdx(-1);
       }
     },
-    { isActive: !intent },
+    { isActive: !intent && !bar },
+  );
+
+  // Report what a store change did, unless it already shows up as a workspace event.
+  const report = (fn: () => unknown) => {
+    const before = currentWs(store.get());
+    const n0 = before?.log.length ?? 0;
+    try {
+      const r = fn();
+      const after = currentWs(store.get());
+      if (typeof r === 'string' && !(after?.id === before?.id && (after?.log.length ?? 0) > n0)) print([[{ t: '  ⎿  ', c: C.faint }, { t: r, c: C.dim }]]);
+    } catch (e) {
+      print([[{ t: '  ⎿  ', c: C.faint }, { t: (e as Error).message, c: C.red }]]);
+    }
+  };
+
+  useInput(
+    (input: string, key: Key) => {
+      if (!bar) return;
+      if (key.escape || (key.ctrl && input === 'c')) return setBar(null);
+      if (bar.kind === 'confirm') {
+        const yes = input.toLowerCase() === 'y' || (key.return && !bar.intent.danger);
+        if (yes) {
+          setBar(null);
+          return report(() => bar.intent.onConfirm()); // it does its own store.mutate
+        }
+        if (input.toLowerCase() === 'n' || key.return) setBar(null);
+        return;
+      }
+      const spec = pickSpec(bar.what, store.get());
+      const n = spec.options.length;
+      const choose = (k: number) => {
+        setBar(null);
+        report(() => store.mutate(spec.label, (d) => spec.apply(d, spec.options[k].value)));
+      };
+      if (key.leftArrow || input === 'h' || (key.tab && key.shift)) return setBar({ ...bar, idx: (bar.idx + n - 1) % n });
+      if (key.rightArrow || input === 'l' || key.tab) return setBar({ ...bar, idx: (bar.idx + 1) % n });
+      if (/^[1-9]$/.test(input) && Number(input) <= n) return choose(Number(input) - 1);
+      if (key.return) return choose(bar.idx);
+    },
+    { isActive: !!bar },
   );
 
   const spec = intent && intent.type !== 'switch' ? formFor(intent, store, sync) : null;
@@ -665,7 +777,7 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
                 store.mutate(null, (d) => ops.selectWs(d, w.id));
               }}
               onDelete={(w) =>
-                setIntent({
+                open({
                   type: 'confirm',
                   title: `删除「${w.title}」？`,
                   message: '任务、日志、版本和快照会一起删除。之后可以 ctrl+z 撤销。',
@@ -688,17 +800,26 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
                       </Text>
                       <Text color={C.faint}>{pad(c.args ?? '', 26)}</Text>
                       <Text color={i === sel ? C.fg2 : C.dim}>{c.desc}</Text>
+                      {i === sel && PICK_CMDS[c.name] ? <Text color={C.accent}>  ←→ 直接选择</Text> : null}
                     </Text>
                   ))}
                 </Box>
               )}
             </>
           )}
-          <Box borderStyle="round" borderColor={formOpen ? C.faint : C.dim} paddingX={1} marginTop={showSugs ? 0 : 1}>
-            <Text color={C.dim}>&gt; </Text>
-            {formOpen ? <Text color={C.faint}>{intent?.type === 'switch' ? '↑ 选择 Plan / Goal · esc 关闭' : '↑ 正在填写上方的表单 · esc 取消'}</Text> : <Cursorline st={line} placeholder={placeholder} />}
+          <Box borderStyle="round" borderColor={bar ? (bar.kind === 'confirm' && bar.intent.danger ? C.red : C.accent) : formOpen ? C.faint : C.dim} paddingX={1} marginTop={showSugs ? 0 : 1}>
+            {bar ? (
+              <BarLine bar={bar} state={state} />
+            ) : (
+              <>
+                <Text color={C.dim}>&gt; </Text>
+                {formOpen ? <Text color={C.faint}>{intent?.type === 'switch' ? '↑ 选择 Plan / Goal · esc 关闭' : '↑ 正在填写上方的表单 · esc 取消'}</Text> : <Cursorline st={line} placeholder={placeholder} />}
+              </>
+            )}
           </Box>
-          <StatusLine state={state} sync={sync} notice={notice} />
+          <StatusLine state={state} sync={sync} notice={notice} preview={bar?.kind === 'pick' ? { what: bar.what, value: pickSpec(bar.what, state).options[bar.idx].value } : undefined}
+            keys={bar ? (bar.kind === 'pick' ? '←→ 选择 · enter 确认 · esc 取消' : `y ${bar.intent.confirmLabel ?? '确认'} · n 取消`) : undefined}
+          />
         </Box>
       </Box>
     </>

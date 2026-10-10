@@ -7,7 +7,7 @@ import { activeSession, EFFORT_ORDER, EFFORTS, estimateTokens, FATIGUE_LABELS, f
 import { ops } from '@automedo/core';
 import { activePlan, currentWs, findWs } from '@automedo/core';
 import type { Effort, Tier, Verdict, Workspace } from '@automedo/core';
-import { describeGuard, fmtAgo, fmtDuration, fmtTokens } from '@automedo/core';
+import { describeGuard, fmtAgo, fmtDuration, fmtTokens, pickSpec, type PickKind } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
 import { useSyncStatus } from '../sync';
 import { disablePush, enablePush, pushState, testPush, type PushState } from '../push';
@@ -108,7 +108,49 @@ export function DialogHost({ dialog }: { dialog: Dialog }) {
       return <SyncSetup />;
     case 'confirm':
       return <Confirm {...dialog} />;
+    case 'pick':
+      return <Pick what={dialog.what} />;
   }
+}
+
+/** One value out of a few (model tier, effort, fatigue): ←→ to move, Enter or a click to choose. */
+function Pick({ what }: { what: PickKind }) {
+  const { state } = useApp();
+  const spec = pickSpec(what, state);
+  const [i, setI] = useState(Math.max(0, spec.current));
+  const { err, submit } = useSubmit();
+  const choose = (k: number) => submit(spec.label, (d) => spec.apply(d, spec.options[k].value));
+  return (
+    <Shell title={spec.title} desc="←→ 选择 · Enter 确认 · Esc 取消" error={err} submitLabel="确认" onSubmit={() => choose(i)}>
+      <div
+        className="seg"
+        role="radiogroup"
+        aria-label={spec.title}
+        data-autofocus
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            e.preventDefault();
+            const n = spec.options.length;
+            setI((x) => (x + (e.key === 'ArrowLeft' ? n - 1 : 1)) % n);
+          } else if (e.key === 'Enter') {
+            e.preventDefault();
+            choose(i);
+          } else if (/^[1-9]$/.test(e.key) && Number(e.key) <= spec.options.length) {
+            choose(Number(e.key) - 1);
+          }
+        }}
+      >
+        {spec.options.map((o, k) => (
+          <button type="button" key={o.value} role="radio" aria-checked={k === i} aria-pressed={k === i} tabIndex={-1} onClick={() => choose(k)}>
+            {o.label}
+            {k === spec.current && <span className="dim"> · 当前</span>}
+            <small>{o.hint}</small>
+          </button>
+        ))}
+      </div>
+    </Shell>
+  );
 }
 
 function NewPlan({ title = '' }: { title?: string }) {

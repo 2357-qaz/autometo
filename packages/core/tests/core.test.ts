@@ -5,6 +5,7 @@ import * as ops from '../src/ops';
 import { execute, type CmdCtx } from '../src/commands';
 import { budgetLevel, estimateTokens, fatigueMult, runSegmentsTokens, tokensToday } from '../src/hie';
 import { generateCompact } from '../src/compact';
+import { pickSpec } from '../src/picks';
 import { seedDemo } from '../src/demo';
 import { diffPlan, diffSummary } from '../src/diff';
 
@@ -95,6 +96,27 @@ describe('goal checkpoints', () => {
 });
 
 describe('HIE', () => {
+  it('/model, /effort, /fatigue without an argument ask for a pick; with one they set it', () => {
+    const { store, open, ctx } = mkCtx();
+    execute('/model', ctx);
+    execute('/effort', ctx);
+    execute('/fatigue', ctx);
+    expect(open.mock.calls.map((c) => c[0])).toEqual([
+      { type: 'pick', what: 'tier' },
+      { type: 'pick', what: 'effort' },
+      { type: 'pick', what: 'fatigue' },
+    ]);
+    expect(store.get().hie.tier).toBe('sonnet'); // no more blind cycling
+    execute('/model opus', ctx);
+    execute('/fatigue 4', ctx);
+    expect(store.get().hie.tier).toBe('opus');
+    expect(pickSpec('tier', store.get()).current).toBe(2);
+    expect(pickSpec('fatigue', store.get()).current).toBe(3);
+    expect(pickSpec('fatigue', emptyState()).current).toBe(-1);
+    store.mutate('x', (d) => pickSpec('effort', d).apply(d, 'high'));
+    expect(store.get().hie.effort).toBe('high');
+  });
+
   it('estimates tokens by tier × effort', () => {
     expect(estimateTokens('sonnet', 'medium', 60)).toBe(48_000);
     expect(estimateTokens('opus', 'high', 60)).toBe(135_000);
