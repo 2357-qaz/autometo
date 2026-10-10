@@ -91,9 +91,14 @@ describe('sync over HTTP', () => {
     a.store.mutate('x', (d) => void ops.createPlan(d, 'P'));
     // Edit after the request was prepared but before the response is applied.
     const realFetch = globalThis.fetch;
+    let injected = false;
     const client = new SyncClient(a.store, (a.client as unknown as { storage: SyncStorage }).storage, {
       fetchImpl: async (input, init) => {
-        a.store.mutate('x', (d) => void ops.addTask(d, '飞行中添加'));
+        // Edit once, while the first request that actually pushes changes is in flight.
+        if (!injected && JSON.parse(String(init?.body)).changes.length) {
+          injected = true;
+          a.store.mutate('x', (d) => void ops.addTask(d, '飞行中添加'));
+        }
         return realFetch(input, init);
       },
     });
@@ -122,6 +127,71 @@ describe('sync over HTTP', () => {
     }
     // Still alive afterwards.
     expect(((await (await fetch(`${url}/v1/health`)).json()) as { ok: boolean }).ok).toBe(true);
+  });
+
+  it('a deletion made while a sync is in flight still reaches the server', async () => {
+    const a = device('E');
+    const b = device('F');
+    a.store.mutate('x', (d) => {
+      ops.createPlan(d, '飞行删除');
+      ops.addTask(d, '会被删掉的任务');
+    });
+    await a.sync();
+    await b.sync();
+    const has = (dev: ReturnType<typeof device>) => dev.state().plans.find((p) => p.title === '飞行删除')!.tasks.some((t) => t.title === '会被删掉的任务');
+    expect(has(b)).toBe(true);
+    // A edits something (so the request carries changes) and, while that request is
+    // in flight, deletes the task.
+    a.store.mutate('x', (d) => {
+      d.ui.activePlanId = d.plans.find((p) => p.title === '飞行删除')!.id;
+      ops.addNote(d, '先改点别的');
+    });
+    const realFetch = globalThis.fetch;
+    let done = false;
+    const client = new SyncClient(a.store, (a.client as unknown as { storage: SyncStorage }).storage, {
+      fetchImpl: async (input, init) => {
+        if (!done) {
+          done = true;
+          a.store.mutate('x', (d) => {
+            const p = d.plans.find((x) => x.title === '飞行删除')!;
+            ops.deleteTask(d, p.tasks.find((t) => t.title === '会被删掉的任务')!.id);
+          });
+        }
+        return realFetch(input, init);
+      },
+    });
+    await client.syncNow(true); // the delete happened mid-flight
+    await client.syncNow(true); // next round must send the tombstone
+    await b.sync();
+    expect(has(a)).toBe(false);
+    expect(has(b)).toBe(false);
+  });
+
+  it("a new device's defaults don't overwrite settings already on the server", async () => {
+    const a = device('G');
+    a.store.mutate('x', (d) => {
+      d.settings.dailyBudget = 150_000;
+      d.hie.tier = 'opus';
+      d.hie.effort = 'high';
+    });
+    await a.sync();
+    // Brand-new device: default budget 200k / sonnet / medium, plus one local-only plan.
+    const b = device('H');
+    b.store.mutate('x', (d) => void ops.createPlan(d, '新设备上离线建的计划'));
+    expect(b.state().settings.dailyBudget).toBe(200_000);
+    await b.sync();
+    expect(b.state().settings.dailyBudget).toBe(150_000);
+    expect(b.state().hie).toEqual({ tier: 'opus', effort: 'high' });
+    await a.sync();
+    expect(a.state().settings.dailyBudget).toBe(150_000);
+    expect(a.state().hie.tier).toBe('opus');
+    // The new device's own data was still uploaded.
+    expect(a.state().plans.some((p) => p.title === '新设备上离线建的计划')).toBe(true);
+    // And a later, real change on the new device does win.
+    b.store.mutate('x', (d) => void (d.settings.dailyBudget = 120_000));
+    await b.sync();
+    await a.sync();
+    expect(a.state().settings.dailyBudget).toBe(120_000);
   });
 
   it('rejects bad tokens and malformed requests', async () => {

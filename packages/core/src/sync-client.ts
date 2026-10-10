@@ -155,24 +155,45 @@ export class SyncClient {
     return this.running;
   }
 
+  private applyRemote(next: AppState) {
+    this.applying = true;
+    try {
+      (this.opts.applyState ?? defaultApply)(this.store, next);
+    } finally {
+      this.applying = false;
+    }
+  }
+
   private async round(throwOnError: boolean) {
     const cfg = this.storage.loadConfig();
     if (!cfg) return;
-    const meta = this.storage.loadMeta() ?? newSyncMeta();
+    let meta = this.storage.loadMeta() ?? newSyncMeta();
+    try {
+      // First contact with this server: pull before pushing, so this device's
+      // defaults (budget, model tier…) can't overwrite what other devices set.
+      if (meta.cursor === 0 && Object.keys(meta.base).length === 0) {
+        this.set({ phase: 'syncing' });
+        const probe = prepareSync(this.store.get(), meta);
+        const pull = { ...probe, request: { ...probe.request, changes: [] } };
+        const res0 = await callSync(cfg, pull.request, this.opts.fetchImpl);
+        const out0 = applySync(this.store.get(), pull, res0, meta, { pullOnly: true });
+        meta = out0.meta;
+        this.storage.saveMeta(meta);
+        if (out0.changed) this.applyRemote(out0.state);
+      }
+    } catch (e) {
+      const err = e as SyncError;
+      this.set({ phase: err.kind === 'network' ? 'offline' : 'error', error: err.message });
+      if (throwOnError) throw e;
+      return;
+    }
     const prepared = prepareSync(this.store.get(), meta);
     this.set({ phase: 'syncing', pending: prepared.request.changes.length });
     try {
       const res = await callSync(cfg, prepared.request, this.opts.fetchImpl);
       const out = applySync(this.store.get(), prepared, res, meta);
       this.storage.saveMeta(out.meta);
-      if (out.changed) {
-        this.applying = true;
-        try {
-          (this.opts.applyState ?? defaultApply)(this.store, out.state);
-        } finally {
-          this.applying = false;
-        }
-      }
+      if (out.changed) this.applyRemote(out.state);
       this.set({ phase: 'idle', lastSyncAt: Date.now(), error: null, pending: 0 });
     } catch (e) {
       const err = e as SyncError;

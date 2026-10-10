@@ -259,12 +259,25 @@ export function prepareSync(state: AppState, meta: SyncMeta, now = Date.now()): 
   for (const [id, r] of snapshot) {
     const h = hashData(r.data) + (r.parent ?? '');
     hashes.set(id, h);
+    // Untouched defaults are "unset", not a choice: never let them overwrite another
+    // device's settings. Once synced, changing back to the default is a real change.
+    if (meta.base[id] === undefined && isUntouchedDefault(r)) continue;
     if (meta.base[id] !== h) changes.push({ id, kind: r.kind, parent: r.parent, rev: next(), data: r.data });
   }
   for (const id of Object.keys(meta.base)) {
     if (!snapshot.has(id)) changes.push({ id, kind: kindOf(id), rev: next(), deleted: true });
   }
   return { request: { clientId: meta.clientId, cursor: meta.cursor, changes }, snapshot, hashes, lastT: t };
+}
+
+const DEFAULTS: Partial<Record<RecordKind, string>> = (() => {
+  const e = emptyState();
+  return { settings: hashData(e.settings), hie: hashData(e.hie) };
+})();
+
+function isUntouchedDefault(r: Rec): boolean {
+  const d = DEFAULTS[r.kind];
+  return d !== undefined && hashData(r.data) === d;
 }
 
 function kindOf(id: string): RecordKind {
@@ -277,7 +290,13 @@ function kindOf(id: string): RecordKind {
  * Merge the server's answer into the *current* state. Records the user edited
  * while the request was in flight win locally and are pushed on the next sync.
  */
-export function applySync(current: AppState, prepared: Prepared, response: SyncResponse, meta: SyncMeta): { state: AppState; meta: SyncMeta; changed: boolean } {
+export function applySync(
+  current: AppState,
+  prepared: Prepared,
+  response: SyncResponse,
+  meta: SyncMeta,
+  opts: { pullOnly?: boolean } = {},
+): { state: AppState; meta: SyncMeta; changed: boolean } {
   const now = decompose(current);
   const editedSince = (id: string) => {
     const a = now.get(id);
@@ -287,8 +306,18 @@ export function applySync(current: AppState, prepared: Prepared, response: SyncR
   };
   const merged = new Map(now);
   const base: Record<string, string> = {};
-  // Everything we sent is now the shared truth (unless edited again meanwhile).
-  for (const [id, h] of prepared.hashes) if (!editedSince(id)) base[id] = h;
+  if (!opts.pullOnly) {
+    // Everything we sent is now the shared truth (unless edited again meanwhile).
+    for (const [id, h] of prepared.hashes) if (!editedSince(id)) base[id] = h;
+  }
+  // Records edited or deleted while the request was in flight keep their *old* base
+  // entry, so the next round still sends them — for a deletion that is what produces
+  // the tombstone (a record missing from both snapshot and base would be forgotten).
+  for (const id of new Set([...prepared.hashes.keys(), ...Object.keys(meta.base)])) {
+    if (!(id in base) && editedSince(id) && (meta.base[id] !== undefined || (!opts.pullOnly && prepared.hashes.has(id)))) {
+      base[id] = meta.base[id] ?? `inflight:${prepared.hashes.get(id)}`;
+    }
+  }
   let changed = false;
   for (const r of response.records) {
     if (editedSince(r.id)) continue;

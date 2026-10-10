@@ -96,3 +96,64 @@ describe('web push', () => {
     expect(JSON.parse(plain.toString('utf8')).title).toBe('✻ 专注时间到了');
   });
 });
+
+describe('reminder delivery retries', async () => {
+  const { prepareSync } = await import('@automedo/core');
+  const MIN = 60_000;
+  function setup() {
+    const db = openDb(':memory:');
+    const calls: string[] = [];
+    const failing = new Set<string>();
+    const push = createPush(db, {
+      sender: (async (sub: webpush.PushSubscription) => {
+        calls.push(sub.endpoint);
+        if (failing.has(sub.endpoint)) throw new Error('ECONNRESET'); // network error: no statusCode
+        return { statusCode: 201, body: '', headers: {} };
+      }) as typeof webpush.sendNotification,
+    });
+    // A goal whose checkpoint is due, written straight into the record store.
+    const s = createStore(emptyState());
+    s.mutate('x', (d) => void (ops.createGoal(d, '跑步', { cadenceDays: 7 }).createdAt -= 8 * 86_400_000));
+    db.sync(prepareSync(s.get(), newSyncMeta('seed')).request);
+    const keys = { p256dh: 'x', auth: 'y' };
+    push.subscribe({ endpoint: 'https://a.example/1', keys });
+    push.subscribe({ endpoint: 'https://b.example/1', keys });
+    return { push, calls, failing };
+  }
+
+  it('retries a failed device with backoff, never re-sends to a device that got it', async () => {
+    const { push, calls, failing } = setup();
+    const T0 = Date.now();
+    failing.add('https://b.example/1');
+    expect((await push.tick(T0)).length).toBe(1); // delivered to A at least
+    expect(calls).toEqual(['https://a.example/1', 'https://b.example/1']);
+    await push.tick(T0 + 30_000); // B still inside its 1-minute backoff
+    expect(calls).toHaveLength(2);
+    failing.clear();
+    await push.tick(T0 + 61_000); // B retried and succeeds; A not touched
+    expect(calls).toEqual(['https://a.example/1', 'https://b.example/1', 'https://b.example/1']);
+    await push.tick(T0 + 10 * MIN);
+    expect(calls).toHaveLength(3); // nothing left to send
+  });
+
+  it('a total outage is not recorded as delivered', async () => {
+    const { push, calls, failing } = setup();
+    const T0 = Date.now();
+    failing.add('https://a.example/1').add('https://b.example/1');
+    expect(await push.tick(T0)).toEqual([]);
+    failing.clear();
+    expect(await push.tick(T0 + 2 * MIN)).toHaveLength(1);
+    expect(calls.filter((c) => c.includes('a.example'))).toHaveLength(2);
+    expect(calls.filter((c) => c.includes('b.example'))).toHaveLength(2);
+  });
+
+  it('gives up on a reminder that keeps failing for more than 12 hours', async () => {
+    const { push, calls, failing } = setup();
+    const T0 = Date.now();
+    failing.add('https://b.example/1');
+    await push.tick(T0);
+    const before = calls.length;
+    await push.tick(T0 + 13 * 60 * MIN);
+    expect(calls.length).toBe(before); // stale: no more attempts
+  });
+});
