@@ -1,26 +1,24 @@
 {
   "name": "automedo",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview",
-    "typecheck": "tsc -b",
-    "test": "vitest run"
-  },
-  "dependencies": {
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "dev": "npm run dev -w @automedo/web",
+    "build": "npm run build -w @automedo/web",
+    "preview": "npm run preview -w @automedo/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "server": "npm start -w @automedo/server",
+    "server:dev": "npm run dev -w @automedo/server",
+    "tui": "npm start -w @automedo/tui --"
   },
   "devDependencies": {
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.2",
-    "jsdom": "^29.1.1",
     "typescript": "^7.0.2",
-    "vite": "^8.3.4",
     "vitest": "^5.0.3"
   }
 }

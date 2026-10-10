@@ -1,0 +1,15 @@
+{
+  "name": "@automedo/core",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "AuTomeDo shared domain logic: plans, goals, execution log, Plan Diff, HIE.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  }
+}
