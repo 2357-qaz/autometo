@@ -457,3 +457,72 @@ button, input, textarea, select { font: inherit; color: inherit; }
   .ws-actions { opacity: 1; }
   .pick-del { visibility: visible; }
 }
+
+/* ───────── PWA / touch ───────── */
+html, body { overscroll-behavior: none; }
+.app { height: var(--app-h, 100dvh); }
+.main {
+  padding-top: max(18px, env(safe-area-inset-top));
+  padding-left: max(24px, env(safe-area-inset-left));
+  padding-right: max(24px, env(safe-area-inset-right));
+}
+.bottom {
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
+  padding-left: max(24px, env(safe-area-inset-left));
+  padding-right: max(24px, env(safe-area-inset-right));
+}
+
+/* Swipe: left = done, right = defer. The hint sits behind the sliding row. */
+.task-wrap { position: relative; }
+.task-wrap .task { position: relative; background: var(--bg); transition: transform 0.18s ease-out; touch-action: pan-y; }
+.task-wrap[data-swipe-hint]::before {
+  content: attr(data-swipe-hint);
+  position: absolute; inset: 0; display: flex; align-items: center; padding: 0 14px; border-radius: 4px; font-size: 12.5px;
+}
+.task-wrap.to-done::before, .task-wrap.commit-done::before { justify-content: flex-end; color: var(--green); background: rgba(111, 191, 115, 0.12); }
+.task-wrap.to-defer::before, .task-wrap.commit-defer::before { justify-content: flex-start; color: var(--yellow); background: rgba(229, 184, 92, 0.12); }
+.task-wrap.commit-done::before { background: rgba(111, 191, 115, 0.28); font-weight: 700; }
+.task-wrap.commit-defer::before { background: rgba(229, 184, 92, 0.28); font-weight: 700; }
+.task-wrap[data-swipe-hint] .task { transition: none; }
+
+.task-actions { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 4px 6px 8px 28px; }
+.chips { display: none; }
+
+/* Mouse + hover: icons on hover, no action bar. */
+@media (hover: hover) and (pointer: fine) {
+  .task-actions { display: none; }
+}
+
+/* Touch: no hover, so everything is visible and big enough to hit. */
+@media (hover: none), (pointer: coarse) {
+  input, textarea, select, .prompt textarea { font-size: 16px; } /* < 16px makes iOS zoom in on focus */
+  .task .tools { display: none; }
+  .task { padding-top: 3px; padding-bottom: 3px; }
+  .task .box { min-width: 28px; min-height: 28px; font-size: 16px; }
+  .btn { padding: 4px 2px; font-size: 14px; }
+  .task-actions .btn { font-size: 14px; }
+  .icon-btn { padding: 6px 8px; font-size: 14px; }
+  .phase-tools { opacity: 1; }
+  .ws-actions { opacity: 1; }
+  .tabs { gap: 18px; }
+  .tabs button, .fold-h, .done-line, .collapsed, .link { padding-top: 4px; padding-bottom: 4px; }
+  .statusline { gap: 10px; }
+  .statusline .sl { padding: 4px 0; }
+  .chips.show { display: flex; }
+}
+.chips { gap: 8px; overflow-x: auto; padding: 0 2px 6px; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
+.chips button {
+  flex: none; background: var(--bg-2); border: 0; border-radius: 4px; padding: 6px 10px; color: var(--link); font-size: 14px; cursor: pointer;
+}
+.chips button:active { background: var(--accent-soft); }
+@media (max-width: 720px) {
+  .main { padding-top: max(14px, env(safe-area-inset-top)); padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+  .bottom { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+}
+
+/* Never let a wide child (chip row, long diff line) widen the whole app on phones. */
+.app { grid-template-columns: minmax(0, 1fr); }
+.main, .bottom { min-width: 0; }
+.chips, .dock, .prompt-wrap, .statusline { max-width: min(860px, 100%); min-width: 0; }
+.dialog-actions { flex-wrap: wrap; row-gap: 8px; }

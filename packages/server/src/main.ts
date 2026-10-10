@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createApp, VERSION } from './app';
 import { openDb } from './db';
+import { createPush } from './push';
 
 const env = process.env;
 const token = env.AUTOMEDO_TOKEN?.trim() || null;
@@ -24,12 +25,15 @@ const host = env.HOST ?? '127.0.0.1';
 const port = Number(env.PORT ?? 8787);
 const webDir = env.AUTOMEDO_WEB_DIR ? resolve(cwd, env.AUTOMEDO_WEB_DIR) : undefined;
 
-const server = createApp({ db, token, webDir });
+const push = createPush(db, { subject: env.AUTOMEDO_VAPID_SUBJECT });
+push.start();
+const server = createApp({ db, token, webDir, push });
 server.listen(port, host, () => {
   console.log(`✻ AuTomeDo server ${VERSION} on http://${host}:${port}`);
   console.log(`  db: ${dbPath}${webDir ? `\n  web: ${webDir}` : ''}${token ? '' : '\n  ⚠ auth disabled (AUTOMEDO_INSECURE=1)'}`);
 });
 const shutdown = () => {
+  push.stop();
   server.close(() => {
     db.close();
     process.exit(0);

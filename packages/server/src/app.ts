@@ -5,6 +5,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { compose, emptyState, type RecordKind, type SyncRequest } from '@automedo/core';
 import type { RecordDb } from './db';
+import type { PushService } from './push';
 
 export const VERSION = '0.2.0';
 const MAX_BODY = 20 * 1024 * 1024;
@@ -17,6 +18,7 @@ export interface AppOptions {
   token: string | null;
   /** Serve this directory (the built web app) at `/`. */
   webDir?: string;
+  push?: PushService;
 }
 
 class HttpError extends Error {
@@ -103,10 +105,11 @@ async function serveStatic(root: string, urlPath: string, res: ServerResponse): 
   }
   try {
     const body = await readFile(file);
-    const isIndex = file.endsWith('index.html');
+    // Only content-hashed build assets are immutable; the shell, service worker and manifest must revalidate.
+    const immutable = /[\\/]assets[\\/]/.test(file);
     res.writeHead(200, {
       'content-type': MIME[extname(file)] ?? 'application/octet-stream',
-      'cache-control': isIndex ? 'no-cache' : 'public, max-age=31536000, immutable',
+      'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
     });
     res.end(body);
     return true;
@@ -117,8 +120,10 @@ async function serveStatic(root: string, urlPath: string, res: ServerResponse): 
 
 export function createApp(opts: AppOptions): Server {
   return createServer(async (req, res) => {
-    const url = new URL(req.url ?? '/', 'http://localhost');
     try {
+      // Never let a malformed request line (e.g. "//" or "//host") throw outside the handler.
+      const raw = req.url ?? '/';
+      const url = new URL('http://localhost' + (raw.startsWith('/') ? raw : '/' + raw));
       if (url.pathname.startsWith('/v1/')) {
         cors(res, req);
         if (req.method === 'OPTIONS') {
@@ -131,13 +136,35 @@ export function createApp(opts: AppOptions): Server {
         if (url.pathname === '/v1/export' && req.method === 'GET') {
           return send(res, 200, compose(opts.db.all().map((r) => ({ id: r.id, kind: r.kind, parent: r.parent, data: r.data })), emptyState().ui));
         }
-        if (url.pathname === '/v1/stats' && req.method === 'GET') return send(res, 200, opts.db.stats());
+        if (url.pathname === '/v1/stats' && req.method === 'GET') return send(res, 200, { ...opts.db.stats(), pushSubscriptions: opts.push?.count() ?? 0 });
+        if (url.pathname.startsWith('/v1/push/')) {
+          const push = opts.push ?? (() => { throw new HttpError(404, 'push disabled'); })();
+          if (url.pathname === '/v1/push/key' && req.method === 'GET') return send(res, 200, { publicKey: push.publicKey });
+          if (url.pathname === '/v1/push/subscribe' && req.method === 'POST') {
+            const b = (await readJson(req)) as { subscription?: { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } }; label?: unknown };
+            const s = b?.subscription;
+            if (!s || typeof s.endpoint !== 'string' || !/^https:\/\//.test(s.endpoint) || typeof s.keys?.p256dh !== 'string' || typeof s.keys?.auth !== 'string') throw new HttpError(400, 'bad subscription');
+            push.subscribe(s as never, typeof b.label === 'string' ? b.label.slice(0, 80) : undefined);
+            return send(res, 200, { ok: true });
+          }
+          if (url.pathname === '/v1/push/unsubscribe' && req.method === 'POST') {
+            const b = (await readJson(req)) as { endpoint?: unknown };
+            if (typeof b?.endpoint !== 'string') throw new HttpError(400, 'bad endpoint');
+            push.unsubscribe(b.endpoint);
+            return send(res, 200, { ok: true });
+          }
+          if (url.pathname === '/v1/push/test' && req.method === 'POST') {
+            return send(res, 200, await push.broadcast({ title: '✻ AuTomeDo', body: '提醒已开启。Checkpoint 到期、阶段逾期、专注超时时会通知你。', tag: 'test' }));
+          }
+        }
         throw new HttpError(404, 'not found');
       }
       if (opts.webDir && (req.method === 'GET' || req.method === 'HEAD') && (await serveStatic(opts.webDir, url.pathname, res))) return;
       throw new HttpError(404, 'not found');
     } catch (e) {
+      if (res.headersSent) return void res.end();
       if (e instanceof HttpError) return send(res, e.status, { error: e.message });
+      if (e instanceof URIError) return send(res, 400, { error: 'bad url' });
       console.error(e);
       send(res, 500, { error: 'internal error' });
     }

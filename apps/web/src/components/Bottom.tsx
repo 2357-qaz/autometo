@@ -182,6 +182,7 @@ export const Bottom = forwardRef<PromptHandle, {
       )}
       <SpinnerLine />
       {dock}
+      <QuickChips show={focused && !v} mode={mode} onPick={(t) => (t.endsWith(' ') ? (setV(t), requestAnimationFrame(() => ta.current?.focus())) : submit(t))} />
       <div className="prompt-wrap">
         {showSugs && (
           <div className="suggest" role="listbox" aria-label="命令补全">
@@ -273,5 +274,36 @@ function SyncIndicator() {
     <button className="sl" title={title} onClick={() => open({ type: 'sync' })}>
       {label}
     </button>
+  );
+}
+
+/** Touch only: common commands above the on-screen keyboard. */
+function QuickChips({ show, mode, onPick }: { show: boolean; mode: 'plan' | 'goal'; onPick: (text: string) => void }) {
+  const { state } = useApp();
+  const session = activeSession(state);
+  const chips: [string, string][] = [
+    ['/done', '/done'],
+    ['/next', '/next'],
+    ['/defer ', '/defer'],
+    ['# ', '# 记录'],
+    mode === 'goal' ? ['/checkpoint', '/checkpoint'] : ['/revise', '/revise'],
+    session ? ['/end', '/end'] : ['/session', '/session'],
+    ['/diff', '/diff'],
+    ['/switch', '/switch'],
+  ];
+  return (
+    <div className={`chips ${show ? 'show' : ''}`} role="toolbar" aria-label="常用命令">
+      {chips.map(([text, label]) => (
+        <button
+          key={label}
+          type="button"
+          // Keep the keyboard open: don't let the tap blur the prompt.
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => onPick(text)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
   );
 }

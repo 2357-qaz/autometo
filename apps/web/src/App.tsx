@@ -16,6 +16,7 @@ import { Dock } from './components/Dock';
 import { Header } from './components/Header';
 import { Bottom, type PromptHandle } from './components/Bottom';
 import { Welcome } from './components/Welcome';
+import type { LaunchResult } from './pwa';
 
 const OPENED_AT = Date.now();
 
@@ -25,10 +26,10 @@ function isTyping(el: Element | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (el as HTMLElement).isContentEditable;
 }
 
-export function App({ store, sync, loadError }: { store: Store; sync: SyncClient; loadError: string | null }) {
+export function App({ store, sync, loadError, launch = null }: { store: Store; sync: SyncClient; loadError: string | null; launch?: LaunchResult | null }) {
   const state = useStore(store);
   const [dialog, setDialog] = useState<Dialog | null>(null);
-  const [output, setOutput] = useState<Output | null>(null);
+  const [output, setOutput] = useState<Output | null>(() => (launch ? { cmd: launch.cmd, text: launch.text, error: launch.error, undoable: !launch.error, at: Date.now() } : null));
   const [sel, setSel] = useState<string | null>(null);
   const [loadErr, setLoadErr] = useState(loadError);
   const [diffView, setDiffView] = useState<{ planId: string; v?: number; at: number } | null>(null);

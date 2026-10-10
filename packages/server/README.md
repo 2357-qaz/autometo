@@ -22,6 +22,7 @@ npm run server
 | `HOST` | `127.0.0.1` | 监听地址。要让其他设备访问，设为 `0.0.0.0` 并放在 HTTPS 反向代理后面 |
 | `PORT` | `8787` | 端口 |
 | `AUTOMEDO_WEB_DIR` | — | 设置后在 `/` 托管网页版（同源，手机直接打开即可） |
+| `AUTOMEDO_VAPID_SUBJECT` | `mailto:automedo@example.com` | 推送的联系方式。Apple 的推送服务要求一个有效的 `mailto:` 或 `https:` 地址，建议改成你自己的邮箱 |
 | `AUTOMEDO_INSECURE` | — | 设为 `1` 时不校验令牌，仅限本机开发 |
 
 ### Docker
@@ -42,9 +43,15 @@ iOS 上的 PWA 需要 HTTPS。建议用 Caddy / Nginx / Cloudflare Tunnel / Tail
 | `GET` | `/v1/health` | 健康检查（无需令牌） |
 | `POST` | `/v1/sync` | 同步：上传本地变更，返回其他设备的变更 |
 | `GET` | `/v1/export` | 导出完整数据（JSON，可在网页版 `/import`） |
-| `GET` | `/v1/stats` | 记录数、删除标记数、当前游标 |
+| `GET` | `/v1/stats` | 记录数、删除标记数、当前游标、推送订阅数 |
+| `GET` | `/v1/push/key` | 推送公钥（VAPID，首次启动时自动生成并保存在数据库里） |
+| `POST` | `/v1/push/subscribe` · `/unsubscribe` · `/test` | 设备订阅 / 取消 / 发送测试通知 |
 
 所有 `/v1/*`（除 health）需要 `Authorization: Bearer <AUTOMEDO_TOKEN>`。
+
+## 提醒
+
+服务器每分钟检查一次：Goal 的 Checkpoint 到期、Plan 阶段过了目标日期、专注 Session 超过计划时长。每条提醒只发一次，发给所有开启了提醒的设备（网页里 `/sync` → 开启提醒）。
 
 ## 同步模型
 

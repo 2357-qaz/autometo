@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Intent as Dialog } from '@automedo/core';
 import { useApp } from '../ctx';
 import { COMMANDS } from '@automedo/core';
@@ -10,6 +10,7 @@ import type { Effort, Tier, Verdict, Workspace } from '@automedo/core';
 import { fmtAgo, fmtDuration, fmtTokens } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
 import { useSyncStatus } from '../sync';
+import { disablePush, enablePush, pushState, testPush, type PushState } from '../push';
 
 function Shell(props: { title: ReactNode; desc?: ReactNode; wide?: boolean; onSubmit?: () => void; children: ReactNode; actions?: ReactNode; submitLabel?: string; danger?: boolean; error?: string | null }) {
   const { close } = useApp();
@@ -699,8 +700,68 @@ function SyncSetup() {
           </div>
         </div>
       )}
+      {cfg && <PushSection />}
       <label className="field"><span>服务器地址</span><input data-autofocus value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://automedo.example.com" spellCheck={false} autoCapitalize="off" /></label>
       <label className="field"><span>访问令牌</span><input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="AUTOMEDO_TOKEN" autoComplete="off" /></label>
     </Shell>
+  );
+}
+
+/** Reminders (Web Push) for this device; needs a connected server. */
+function PushSection() {
+  const { sync } = useApp();
+  const cfg = sync.config()!;
+  const [st, setSt] = useState<PushState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const refresh = () => void pushState().then(setSt);
+  useEffect(refresh, []);
+  const run = async (fn: () => Promise<string>) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      setMsg({ text: await fn() });
+    } catch (e) {
+      setMsg({ text: (e as Error).message, error: true });
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
+  return (
+    <div className="field">
+      <span>提醒</span>
+      <div>
+        {!st ? (
+          <span className="dim">检查中…</span>
+        ) : st.kind === 'unsupported' ? (
+          <span className="dim">
+            {st.reason === 'ios-install'
+              ? '在 iPhone 上：先在 Safari 里点「分享 → 添加到主屏幕」，从主屏幕打开 AuTomeDo 后再来这里开启提醒（需要 iOS 16.4 及以上）。'
+              : st.reason === 'no-sw'
+                ? '需要通过服务器托管的正式版本打开（开发模式下没有离线缓存，无法推送）。'
+                : '这个浏览器不支持推送通知。'}
+          </span>
+        ) : st.kind === 'denied' ? (
+          <span className="yellow">通知权限已被拒绝。请在系统设置里允许 AuTomeDo 的通知，然后再回来开启。</span>
+        ) : (
+          <>
+            <span className={st.kind === 'on' ? 'green' : 'dim'}>{st.kind === 'on' ? '✓ 这台设备已开启' : '未开启'}</span>
+            <span className="dim">　Checkpoint 到期、阶段逾期、专注超时时通知你</span>
+            <div className="row-btns" style={{ marginTop: 6 }}>
+              {st.kind === 'off' ? (
+                <button type="button" className="btn primary" disabled={busy} onClick={() => void run(async () => (await enablePush(cfg), '已开启提醒'))}>开启提醒</button>
+              ) : (
+                <>
+                  <button type="button" className="btn" disabled={busy} onClick={() => void run(async () => `已发送到 ${await testPush(cfg)} 台设备`)}>发送测试</button>
+                  <button type="button" className="btn danger" disabled={busy} onClick={() => void run(async () => (await disablePush(cfg), '已关闭这台设备的提醒'))}>关闭提醒</button>
+                </>
+              )}
+            </div>
+          </>
+        )}
+        {msg && <div className={msg.error ? 'red' : 'dim'}>{msg.text}</div>}
+      </div>
+    </div>
   );
 }

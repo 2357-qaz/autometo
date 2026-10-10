@@ -105,6 +105,25 @@ describe('sync over HTTP', () => {
     expect(b.state().plans.find((p) => p.title === 'P')?.tasks.map((t) => t.title)).toEqual(['飞行中添加']);
   });
 
+  it('survives malformed request paths', async () => {
+    const { request } = await import('node:http');
+    const port = (server.address() as AddressInfo).port;
+    for (const path of ['//', '//evil.com/x', '/%E0%A4%A', '/v1/%ZZ', '/..%2f..%2fetc/passwd', '/v1/sync?x=%']) {
+      const status = await new Promise<number>((resolve, reject) => {
+        const r = request({ host: '127.0.0.1', port, path, method: 'GET' }, (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        });
+        r.on('error', reject);
+        r.end();
+      });
+      expect(status).toBeGreaterThanOrEqual(400);
+      expect(status).toBeLessThan(500);
+    }
+    // Still alive afterwards.
+    expect(((await (await fetch(`${url}/v1/health`)).json()) as { ok: boolean }).ok).toBe(true);
+  });
+
   it('rejects bad tokens and malformed requests', async () => {
     const bad = await fetch(`${url}/v1/sync`, { method: 'POST', headers: { authorization: 'Bearer nope' }, body: '{}' });
     expect(bad.status).toBe(401);

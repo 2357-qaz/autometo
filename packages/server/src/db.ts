@@ -3,6 +3,8 @@ import { DatabaseSync } from 'node:sqlite';
 import type { SyncRecord, SyncRequest, SyncResponse } from '@automedo/core';
 
 export interface RecordDb {
+  /** Underlying connection, for other server modules (push). */
+  raw: DatabaseSync;
   sync(req: SyncRequest): SyncResponse;
   all(): SyncRecord[];
   stats(): { records: number; tombstones: number; cursor: number };
@@ -45,6 +47,7 @@ export function openDb(path: string): RecordDb {
   });
 
   return {
+    raw: db,
     sync(req) {
       db.exec('BEGIN IMMEDIATE');
       try {

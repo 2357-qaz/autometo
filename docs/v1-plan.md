@@ -1,6 +1,6 @@
 # AuTomeDo V1 技术方案
 
-> 状态：第 1–3 阶段已完成 · 2026-10-10
+> 状态：第 1–4 阶段已完成 · 2026-10-10
 > 已确定：**单人自用** · **iOS 先做 PWA** · **终端版用 TypeScript + Ink**
 
 ## 目标
@@ -69,4 +69,4 @@ apps/tui          终端版，Ink（第 3 阶段）
 1. ✅ **共用核心**：拆出 `packages/core`，Web 改为引用它；修复 Plan/Goal 无法从界面删除的问题。
 2. ✅ **Server + 同步**：`packages/server`（node:http + node:sqlite），`/v1/sync`、`/v1/export`，可托管网页版；同步逻辑在 `packages/core/src/sync.ts`，Web 通过 `/sync` 连接。
 3. ✅ **TUI**：`apps/tui`（Ink 8）：Static 滚动历史 + 底部 Dock/输入/状态行、行内表单、切换器、`$EDITOR` 编辑快照、子命令、文件持久化与外部修改监听、同步。
-4. **PWA**：manifest、Service Worker、所有编辑操作在触屏上可用、快速记录、推送。
+4. ✅ **PWA**：manifest + Tomo 图标、Service Worker（离线可用）、iOS 安全区域与键盘适配、点按任务展开操作栏、左滑完成 / 右滑延期、键盘上方命令条、`?add=` / `?note=` 快速记录、Web Push 提醒（Checkpoint 到期、阶段逾期、专注超时）。
