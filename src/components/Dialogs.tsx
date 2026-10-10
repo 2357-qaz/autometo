@@ -579,14 +579,23 @@ function AsciiSlider({ value, onChange, label, step = 5, cells = 20 }: { value: 
         if (e.key === 'Home') { e.preventDefault(); set(0); }
         if (e.key === 'End') { e.preventDefault(); set(100); }
       }}
-      onMouseDown={(e) => {
+      onPointerDown={(e) => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        e.currentTarget.focus();
+        e.currentTarget.setPointerCapture(e.pointerId);
         const bar = (e.currentTarget.querySelector('.as-bar') as HTMLElement).getBoundingClientRect();
-        const move = (x: number) => set(((x - bar.left) / bar.width) * 100);
-        move(e.clientX);
-        const mm = (ev: MouseEvent) => move(ev.clientX);
-        const mu = () => { window.removeEventListener('mousemove', mm); window.removeEventListener('mouseup', mu); };
-        window.addEventListener('mousemove', mm);
-        window.addEventListener('mouseup', mu);
+        if (bar.width > 0) set(((e.clientX - bar.left) / bar.width) * 100);
+      }}
+      onPointerMove={(e) => {
+        if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+        const bar = (e.currentTarget.querySelector('.as-bar') as HTMLElement).getBoundingClientRect();
+        if (bar.width > 0) set(((e.clientX - bar.left) / bar.width) * 100);
+      }}
+      onPointerUp={(e) => {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+      }}
+      onPointerCancel={(e) => {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
       }}
     >
       <span className="as-bar">
