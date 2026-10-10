@@ -77,9 +77,11 @@ describe('sync over HTTP', () => {
     expect(a.state().plans[0].tasks[0].title).toBe('B 改的');
     expect(b.state().plans[0].tasks[0].title).toBe('B 改的');
 
-    // Deleting a whole plan propagates and does not come back.
+    // Deleting a whole plan propagates and does not come back. (It is the server's last
+    // plan, so the mass-delete guard pauses it until confirmed — see guard.test.ts.)
     b.store.mutate('x', (d) => ops.deleteWs(d, d.plans[0].id));
-    await b.sync();
+    await expect(b.sync()).rejects.toThrow(/已暂停/);
+    await b.client.confirmDeletes();
     await a.sync();
     await b.sync();
     expect(a.state().plans).toHaveLength(0);

@@ -4,7 +4,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { compose, emptyState, type RecordKind, type SyncRequest } from '@automedo/core';
-import type { RecordDb } from './db';
+import { MassDeleteError, type RecordDb } from './db';
 import type { PushService } from './push';
 
 export const VERSION = '0.2.0';
@@ -78,6 +78,7 @@ export function validateSync(body: unknown): SyncRequest {
     if (c.parent !== undefined && typeof c.parent !== 'string') throw new HttpError(400, `bad parent for ${c.id}`);
     if (!c.deleted && c.data === undefined) throw new HttpError(400, `missing data for ${c.id}`);
   }
+  if (b.confirmDeletes !== undefined && (!Number.isInteger(b.confirmDeletes) || b.confirmDeletes < 0)) throw new HttpError(400, 'bad confirmDeletes');
   return b as SyncRequest;
 }
 
@@ -164,6 +165,7 @@ export function createApp(opts: AppOptions): Server {
     } catch (e) {
       if (res.headersSent) return void res.end();
       if (e instanceof HttpError) return send(res, e.status, { error: e.message });
+      if (e instanceof MassDeleteError) return send(res, 409, e.guard);
       if (e instanceof URIError) return send(res, 400, { error: 'bad url' });
       console.error(e);
       send(res, 500, { error: 'internal error' });

@@ -1,7 +1,7 @@
 // Sync client shared by web and TUI: talks to the AuTomeDo server over HTTP.
 import type { Store } from './store';
 import type { AppState } from './types';
-import { applySync, newSyncMeta, prepareSync, type SyncMeta, type SyncResponse } from './sync';
+import { applySync, newSyncMeta, prepareSync, type DeleteGuard, type SyncMeta, type SyncResponse } from './sync';
 
 export interface SyncConfig {
   url: string; // e.g. https://automedo.example.com
@@ -29,12 +29,25 @@ export interface SyncStatus {
   error: string | null;
   /** Local changes not yet acknowledged by the server (as of the last attempt). */
   pending: number;
+  /** Sync is paused: the server wants confirmation before this mass deletion. */
+  confirm: DeleteGuard | null;
 }
 
 export class SyncError extends Error {
-  constructor(message: string, readonly kind: 'auth' | 'network' | 'server' | 'protocol') {
+  constructor(
+    message: string,
+    readonly kind: 'auth' | 'network' | 'server' | 'protocol' | 'confirm',
+    readonly guard?: DeleteGuard,
+  ) {
     super(message);
   }
+}
+
+/** One line for the UI: what a paused sync would delete. */
+export function describeGuard(g: DeleteGuard): string {
+  const names = g.workspaces.map((w) => `${w.kind === 'plan' ? '计划' : '目标'}「${w.title || '未命名'}」`);
+  const shown = names.slice(0, 3).join('、') + (names.length > 3 ? ` 等 ${names.length} 个` : '');
+  return `这次同步会删除服务器上的 ${g.deletes} 条记录${shown ? `（含${shown}）` : ''}，已暂停，等你确认`;
 }
 
 const normUrl = (u: string) => u.replace(/\/+$/, '');
@@ -63,6 +76,10 @@ export async function callSync(cfg: SyncConfig, body: unknown, fetchImpl: typeof
     throw new SyncError(`连不上服务器：${(e as Error).message}`, 'network');
   }
   if (res.status === 401) throw new SyncError('访问令牌不正确', 'auth');
+  if (res.status === 409) {
+    const g = (await res.json().catch(() => null)) as DeleteGuard | null;
+    if (g?.error === 'confirm-delete') throw new SyncError(describeGuard(g), 'confirm', g);
+  }
   if (!res.ok) throw new SyncError(`服务器错误 ${res.status}：${(await res.text()).slice(0, 200)}`, 'server');
   const json = (await res.json()) as SyncResponse;
   if (typeof json?.cursor !== 'number' || !Array.isArray(json.records)) throw new SyncError('服务器返回的数据格式不对', 'protocol');
@@ -80,7 +97,9 @@ export interface SyncClientOptions {
 }
 
 export class SyncClient {
-  private status: SyncStatus = { phase: 'off', lastSyncAt: null, error: null, pending: 0 };
+  private status: SyncStatus = { phase: 'off', lastSyncAt: null, error: null, pending: 0, confirm: null };
+  /** Set while running a round the user confirmed: deletions the server may accept. */
+  private allowDeletes: number | undefined;
   private listeners = new Set<() => void>();
   private running: Promise<void> | null = null;
   private again = false;
@@ -167,7 +186,7 @@ export class SyncClient {
       const cur = this.storage.loadMeta();
       this.storage.saveMeta(prevMeta ?? { ...newSyncMeta(cur?.clientId), lastT: cur?.lastT ?? 0 });
       this.storage.saveConfig(prevConfig);
-      this.set({ phase: prevConfig ? 'idle' : 'off', error: (e as Error).message });
+      this.set({ phase: prevConfig ? 'idle' : 'off', error: (e as Error).message, confirm: null });
       restoreBackground();
       throw e;
     }
@@ -178,7 +197,33 @@ export class SyncClient {
   disconnect() {
     this.stop();
     this.storage.saveConfig(null);
-    this.set({ phase: 'off', error: null, pending: 0 });
+    this.set({ phase: 'off', error: null, pending: 0, confirm: null });
+  }
+
+  /** The user agrees to the deletions the server paused on: send them through once. */
+  async confirmDeletes(): Promise<void> {
+    const g = this.status.confirm;
+    if (!g) return;
+    await this.running?.catch(() => {});
+    this.allowDeletes = g.deletes;
+    try {
+      await this.syncNow(true);
+    } finally {
+      this.allowDeletes = undefined;
+    }
+  }
+
+  /**
+   * The user does NOT want those deletions: forget what this device thinks it has
+   * synced and pull everything again (first contact), so records missing here come
+   * back from the server. Server versions win over local edits of the same records.
+   */
+  async restoreFromServer(): Promise<void> {
+    await this.running?.catch(() => {});
+    const cur = this.storage.loadMeta();
+    this.storage.saveMeta({ ...newSyncMeta(cur?.clientId), lastT: cur?.lastT ?? 0 });
+    this.set({ confirm: null });
+    await this.syncNow(true);
   }
 
   schedule() {
@@ -187,12 +232,16 @@ export class SyncClient {
     this.timer = setTimeout(() => void this.syncNow(), this.opts.debounceMs ?? 1500);
   }
 
-  /** Run one sync round (coalescing concurrent calls). */
+  /**
+   * Run one sync round. Background calls coalesce with a running round; a caller that
+   * wants the error (throwOnError) waits for it and runs its own, so it sees its own result.
+   */
   async syncNow(throwOnError = false): Promise<void> {
-    if (this.running) {
+    if (this.running && !throwOnError) {
       this.again = true;
       return this.running;
     }
+    while (this.running) await this.running.catch(() => {});
     this.running = this.round(throwOnError).finally(() => {
       this.running = null;
       if (this.again) {
@@ -243,15 +292,16 @@ export class SyncClient {
     const prepared = prepareSync(this.store.get(), meta);
     this.set({ phase: 'syncing', pending: prepared.request.changes.length });
     try {
-      const res = await callSync(cfg, prepared.request, this.opts.fetchImpl);
+      const req = this.allowDeletes ? { ...prepared.request, confirmDeletes: this.allowDeletes } : prepared.request;
+      const res = await callSync(cfg, req, this.opts.fetchImpl);
       const out = applySync(this.store.get(), prepared, res, meta);
       // Apply first, then save meta: saveMeta writes meta + current state together.
       if (out.changed) this.applyRemote(out.state);
       this.storage.saveMeta(out.meta);
-      this.set({ phase: 'idle', lastSyncAt: Date.now(), error: null, pending: 0 });
+      this.set({ phase: 'idle', lastSyncAt: Date.now(), error: null, pending: 0, confirm: null });
     } catch (e) {
       const err = e as SyncError;
-      this.set({ phase: err.kind === 'network' ? 'offline' : 'error', error: err.message });
+      this.set({ phase: err.kind === 'network' ? 'offline' : 'error', error: err.message, confirm: err.guard ?? null });
       if (throwOnError) throw e;
     }
   }

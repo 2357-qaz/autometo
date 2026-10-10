@@ -7,7 +7,7 @@ import { activeSession, EFFORT_ORDER, EFFORTS, estimateTokens, FATIGUE_LABELS, r
 import { ops } from '@automedo/core';
 import { activePlan, currentWs, findWs } from '@automedo/core';
 import type { Effort, Tier, Verdict, Workspace } from '@automedo/core';
-import { fmtAgo, fmtDuration, fmtTokens } from '@automedo/core';
+import { describeGuard, fmtAgo, fmtDuration, fmtTokens } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
 import { useSyncStatus } from '../sync';
 import { disablePush, enablePush, pushState, testPush, type PushState } from '../push';
@@ -694,16 +694,56 @@ function SyncSetup() {
         <div className="field">
           <span>状态</span>
           <div>
-            <span className={status.phase === 'idle' ? 'green' : status.phase === 'error' ? 'red' : status.phase === 'offline' ? 'yellow' : 'dim'}>{PHASE_LABEL[status.phase]}</span>
+            {status.confirm ? (
+              <span className="yellow">已暂停，等你确认（见下方）</span>
+            ) : (
+              <span className={status.phase === 'idle' ? 'green' : status.phase === 'error' ? 'red' : status.phase === 'offline' ? 'yellow' : 'dim'}>{PHASE_LABEL[status.phase]}</span>
+            )}
             {status.lastSyncAt && <span className="dim"> · 上次 {fmtAgo(status.lastSyncAt)}</span>}
-            {status.error && <div className="red">{status.error}</div>}
+            {status.error && !status.confirm && <div className="red">{status.error}</div>}
           </div>
         </div>
       )}
+      {cfg && status.confirm && <DeleteGuardSection />}
       {cfg && <PushSection />}
       <label className="field"><span>服务器地址</span><input data-autofocus value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://automedo.example.com" spellCheck={false} autoCapitalize="off" /></label>
       <label className="field"><span>访问令牌</span><input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="AUTOMEDO_TOKEN" autoComplete="off" /></label>
     </Shell>
+  );
+}
+
+/** The server paused a mass deletion: confirm it, or pull everything back from the server. */
+function DeleteGuardSection() {
+  const { sync, say } = useApp();
+  const guard = useSyncStatus(sync).confirm;
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const run = async (fn: () => Promise<void>, text: string) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await fn();
+      say({ cmd: '/sync', text });
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!guard) return null;
+  return (
+    <div className="field">
+      <span>待确认</span>
+      <div>
+        <span className="yellow">{describeGuard(guard)}。</span>
+        <span className="dim">如果不是你删的，选「从服务器恢复」：被删的内容会回来，同一条记录以服务器版本为准。</span>
+        <div className="row-btns" style={{ marginTop: 6 }}>
+          <button type="button" className="btn primary" disabled={busy} onClick={() => void run(() => sync.restoreFromServer(), '已从服务器恢复，同步继续')}>从服务器恢复</button>
+          <button type="button" className="btn danger" disabled={busy} onClick={() => void run(() => sync.confirmDeletes(), `已确认，服务器上删除了 ${guard.deletes} 条记录`)}>确认删除</button>
+        </div>
+        {err && <div className="red">{err}</div>}
+      </div>
+    </div>
   );
 }
 

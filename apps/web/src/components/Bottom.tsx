@@ -265,6 +265,7 @@ function SyncIndicator() {
     st.phase === 'off' ? <span className="faint">本地</span>
     : st.phase === 'syncing' ? <span className="blue">⟳ 同步中</span>
     : st.phase === 'offline' ? <span className="yellow">⚠ 离线</span>
+    : st.confirm ? <span className="yellow">⏸ 同步待确认</span>
     : st.phase === 'error' ? <span className="red">✗ 同步失败</span>
     : <span className="dim">✓ 已同步</span>;
   const title =

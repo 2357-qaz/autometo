@@ -45,6 +45,22 @@ export interface SyncRequest {
   clientId: string;
   cursor: number;
   changes: SyncRecord[];
+  /** The user confirmed a mass deletion of up to this many records (see DeleteGuard). */
+  confirmDeletes?: number;
+}
+
+/**
+ * The server refuses (HTTP 409, nothing applied) a sync that would delete a lot at
+ * once until the user confirms it — a safety net against a client bug wiping data.
+ */
+export interface DeleteGuard {
+  error: 'confirm-delete';
+  /** Live records this request would delete. */
+  deletes: number;
+  /** Live content records (excluding logs and settings) on the server before the request. */
+  live: number;
+  /** Plans/goals among them. */
+  workspaces: { kind: 'plan' | 'goal'; title: string }[];
 }
 
 export interface SyncResponse {

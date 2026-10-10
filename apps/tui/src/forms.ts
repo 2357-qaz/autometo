@@ -3,6 +3,7 @@ import {
   activePlan,
   activeSession,
   currentWs,
+  describeGuard,
   EFFORT_ORDER,
   EFFORTS,
   FATIGUE_LABELS,
@@ -226,6 +227,42 @@ export function formFor(intent: Intent, store: Store, sync: SyncClient): FormSpe
       };
     case 'sync': {
       const cfg = sync.config();
+      const guard = sync.getStatus().confirm;
+      if (cfg && guard) {
+        return {
+          title: '同步已暂停',
+          color: '#e0c07a',
+          desc: `${describeGuard(guard)}。如果不是你删的，选「从服务器恢复」。`,
+          fields: [
+            {
+              kind: 'select',
+              key: 'act',
+              label: '怎么处理',
+              options: [
+                { value: 'restore', label: '从服务器恢复', hint: '找回被删的内容；同一条记录以服务器版本为准' },
+                { value: 'confirm', label: '确认删除', hint: `从服务器上删除这 ${guard.deletes} 条记录` },
+                { value: 'later', label: '稍后再说', hint: '保持暂停，数据都还在' },
+              ],
+              initial: 'restore',
+            },
+          ],
+          submit: async (v) => {
+            try {
+              if (v.act === 'confirm') {
+                await sync.confirmDeletes();
+                return { text: `已确认，服务器上删除了 ${guard.deletes} 条记录` };
+              }
+              if (v.act === 'restore') {
+                await sync.restoreFromServer();
+                return { text: '已从服务器恢复，同步继续' };
+              }
+              return { text: '同步保持暂停，随时 /sync 处理' };
+            } catch (e) {
+              return { error: (e as Error).message };
+            }
+          },
+        };
+      }
       return {
         title: '同步',
         color: '#7aa7e0',
