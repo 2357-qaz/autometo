@@ -21,10 +21,11 @@ beforeAll(async () => {
 });
 afterAll(() => Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r())))));
 
-function device(id: string, fetchImpl?: typeof fetch) {
+function device(id: string, fetchImpl?: typeof fetch, opts: { fresh?: boolean } = {}) {
   const disk = { doc: null as string | null };
   let cfg: SyncConfig | null = null;
-  const p = createDocPersistence({ read: () => disk.doc, write: (t) => void (disk.doc = t) }, () => newSyncMeta(id));
+  // fresh: a brand-new install has no sync meta at all until its first sync.
+  const p = createDocPersistence({ read: () => disk.doc, write: (t) => void (disk.doc = t) }, opts.fresh ? undefined : () => newSyncMeta(id));
   const store = createStore(p.load().state, p.persist, 0);
   p.attach(store);
   const client = new SyncClient(store, { loadConfig: () => cfg, saveConfig: (c) => void (cfg = c), loadMeta: p.loadMeta, saveMeta: p.saveMeta }, { fetchImpl });
@@ -99,5 +100,36 @@ describe('switching servers', () => {
     const b = device('F');
     await b.client.connect({ url: NEW, token: TOKEN });
     expect(b.state().plans.some((p) => p.title === '搬家')).toBe(true);
+  });
+
+  it('a first connect that fails after pulling leaves no meta behind, so a retry cannot delete the server\'s records', async () => {
+    const owner = device('P');
+    owner.store.mutate('x', (d) => {
+      ops.createPlan(d, '服务器上已有的计划');
+      ops.addTask(d, '不能被删');
+    });
+    await owner.client.connect({ url: OLD, token: TOKEN });
+
+    // New device: the pull-only first round succeeds, the next request dies on the network.
+    let syncCalls = 0;
+    let failSecond = true;
+    const flaky: typeof fetch = async (input, init) => {
+      if (String(input).endsWith('/v1/sync') && ++syncCalls === 2 && failSecond) throw new TypeError('network down');
+      return fetch(input, init);
+    };
+    const n = device('N', flaky, { fresh: true });
+    expect(n.meta()).toBeNull();
+    await expect(n.client.connect({ url: OLD, token: TOKEN })).rejects.toThrow();
+    expect(n.config()).toBeNull();
+    expect(n.state().plans).toEqual([]); // back to the pre-connect state…
+    const m = n.meta(); // …and the bookkeeping must not claim it ever saw the server's records
+    expect(m === null || (m.cursor === 0 && Object.keys(m.base).length === 0)).toBe(true);
+
+    failSecond = false;
+    await n.client.connect({ url: OLD, token: TOKEN });
+    expect(titles(n.state(), '服务器上已有的计划')).toEqual(['不能被删']);
+    const check = device('Q');
+    await check.client.connect({ url: OLD, token: TOKEN });
+    expect(titles(check.state(), '服务器上已有的计划')).toEqual(['不能被删']);
   });
 });

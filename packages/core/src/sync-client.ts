@@ -161,7 +161,11 @@ export class SyncClient {
     } catch (e) {
       this.running = null;
       if (this.store.get() !== prevState) this.applyRemote(prevState);
-      if (prevMeta) this.storage.saveMeta(prevMeta); // written together with the restored state
+      // Always write the meta back (atomically with the restored state). With no previous meta,
+      // a fresh one: keeping the pulled cursor/base next to restored-away data would make the
+      // next sync read every pulled record as a local deletion and push tombstones for them.
+      const cur = this.storage.loadMeta();
+      this.storage.saveMeta(prevMeta ?? { ...newSyncMeta(cur?.clientId), lastT: cur?.lastT ?? 0 });
       this.storage.saveConfig(prevConfig);
       this.set({ phase: prevConfig ? 'idle' : 'off', error: (e as Error).message });
       restoreBackground();
