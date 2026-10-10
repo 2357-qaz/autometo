@@ -2,7 +2,7 @@
 // human-readable result line. User errors are thrown as UserError.
 // Every meaningful change emits a structured event into the workspace's Execution Log.
 import type { AppState, Checkpoint, DiffLine, Effort, Goal, LogEntry, Plan, PlanVersion, Session, Task, TaskStatus, Tier, Workspace } from './types';
-import { activeSession, focusedMsBetween, sessionTokens, tokensBetween, TIERS } from './hie';
+import { activeSession, fatigueMult, focusedMsBetween, latestFatigue, sessionTokens, tokensBetween, TIERS } from './hie';
 import { activeGoal, activePlan, currentWs, findWs } from './state';
 import { DAY, uid } from './util';
 
@@ -638,7 +638,7 @@ export function setEffort(d: AppState, effort: Effort): string {
 function splitSession(d: AppState, s: Session, patch: Partial<Pick<Session, 'tier' | 'effort'>>) {
   const now = Date.now();
   s.endedAt = now;
-  s.tokens = sessionTokens(s, now);
+  s.tokens = sessionTokens(s, now, latestFatigue(d, now));
   d.sessions.push({ ...s, ...patch, id: uid(), startedAt: now, endedAt: undefined, tokens: undefined, fatigue: undefined, outcome: undefined });
 }
 
@@ -671,13 +671,16 @@ export function endSession(d: AppState, opts: { fatigue?: number | null; outcome
   const s = activeSession(d) ?? fail('当前没有进行中的 Session');
   const now = Date.now();
   s.endedAt = now;
-  s.tokens = sessionTokens(s, now);
+  // The fatigue reported at the end prices the whole session (every segment of the run,
+  // e.g. before and after a tier switch); without one, the status-bar fatigue does.
+  const fat = opts.fatigue || latestFatigue(d, now);
+  const run = runSegments(d, s.runId);
+  for (const x of run) x.tokens = sessionTokens({ ...x, tokens: undefined }, now, fat);
   if (opts.fatigue) {
     s.fatigue = opts.fatigue;
     d.fatigue.push({ at: now, level: opts.fatigue });
   }
   if (opts.outcome?.trim()) s.outcome = opts.outcome.trim();
-  const run = runSegments(d, s.runId);
   const ws = findWs(d, s.wsId);
   const durMs = now - run[0].startedAt;
   const mins = Math.round(durMs / 60_000);
@@ -689,8 +692,8 @@ export function endSession(d: AppState, opts: { fatigue?: number | null; outcome
       durMs,
       tokens: total,
       reason: s.outcome,
-      detail: opts.fatigue ? `疲劳 ${opts.fatigue}/5` : undefined,
-      text: `结束 Session · ${mins}m · ${total} tokens${s.outcome ? ` · ${s.outcome}` : ''}${opts.fatigue ? ` · 疲劳 ${opts.fatigue}/5` : ''}`,
+      detail: fat ? `疲劳 ${fat}/5 ×${fatigueMult(fat)}` : undefined,
+      text: `结束 Session · ${mins}m · ${total} tokens${s.outcome ? ` · ${s.outcome}` : ''}${fat ? ` · 疲劳 ${fat}/5 ×${fatigueMult(fat)}` : ''}`,
     });
   }
   return `Session 结束 · ${mins} 分钟 · ${total.toLocaleString()} tokens`;

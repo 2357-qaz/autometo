@@ -1,6 +1,6 @@
 // Rule-based context snapshot ("Compact"). No LLM involved.
 import type { AppState, Goal, Plan, Workspace } from './types';
-import { activeSession, sessionTokens, TIERS } from './hie';
+import { activeSession, latestFatigue, sessionTokens, TIERS } from './hie';
 import { checkpointDue, currentPhase, nextCheckpointAt, orderedTasks } from './ops';
 import { diffPlan, diffSummary } from './diff';
 import { fmtDate, fmtTime, startOfDay } from './util';
@@ -79,7 +79,7 @@ function goalLines(g: Goal, now: number): string[] {
 function sessionLines(state: AppState, ws: Workspace, now: number): string[] {
   const sod = startOfDay(now);
   const mine = state.sessions.filter((s) => s.wsId === ws.id && (s.endedAt ?? now) >= sod);
-  const tokens = mine.reduce((a, s) => a + sessionTokens(s, now), 0);
+  const tokens = mine.reduce((a, s) => a + sessionTokens(s, now, latestFatigue(state, now)), 0);
   const mins = Math.round(mine.reduce((a, s) => a + ((s.endedAt ?? now) - s.startedAt), 0) / 60_000);
   const cur = activeSession(state);
   const out = ['## 今日投入（HIE）'];

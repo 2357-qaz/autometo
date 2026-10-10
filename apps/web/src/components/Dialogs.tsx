@@ -3,7 +3,7 @@ import type { Intent as Dialog } from '@automedo/core';
 import { useApp } from '../ctx';
 import { COMMANDS } from '@automedo/core';
 import { generateCompact } from '@automedo/core';
-import { activeSession, EFFORT_ORDER, EFFORTS, estimateTokens, FATIGUE_LABELS, runSegmentsTokens, TIER_ORDER, TIERS, tokensToday } from '@automedo/core';
+import { activeSession, EFFORT_ORDER, EFFORTS, estimateTokens, FATIGUE_LABELS, fatigueMult, latestFatigue, runSegmentsTokens, TIER_ORDER, TIERS, tokensToday } from '@automedo/core';
 import { ops } from '@automedo/core';
 import { activePlan, currentWs, findWs } from '@automedo/core';
 import type { Effort, Tier, Verdict, Workspace } from '@automedo/core';
@@ -205,7 +205,8 @@ function StartSession({ minutes }: { minutes?: number }) {
   const [mins, setMins] = useState(String(minutes ?? 25));
   const [intent, setIntent] = useState(active?.title ?? (ws?.kind === 'goal' ? ws.nextAction : ''));
   const { err, submit } = useSubmit();
-  const est = estimateTokens(tier, effort, Number(mins) || 0);
+  const fatNow = latestFatigue(state);
+  const est = estimateTokens(tier, effort, Number(mins) || 0, fatNow);
   const used = tokensToday(state);
   const left = state.settings.dailyBudget - used;
   return (
@@ -224,6 +225,7 @@ function StartSession({ minutes }: { minutes?: number }) {
           <span>预计消耗</span>
           <div>
             ≈ <span className="accent">{fmtTokens(est)}</span> tokens
+            {fatigueMult(fatNow) > 1 && <span className="yellow"> · 疲劳 {fatNow}/5 ×{fatigueMult(fatNow)}</span>}
             <span className={est > left ? 'red' : 'dim'} style={{ marginLeft: 12 }}>今日剩余 {fmtTokens(Math.max(0, left))}{est > left ? ' · 将超出预算' : ''}</span>
           </div>
         </div>
@@ -238,7 +240,7 @@ function FatiguePicker({ v, set }: { v: number | null; set: (n: number) => void 
     <div className="seg inline" role="group" aria-label="疲劳自评">
       {[1, 2, 3, 4, 5].map((n) => (
         <button type="button" key={n} aria-pressed={v === n} onClick={() => set(n)}>
-          {n}<small>{FATIGUE_LABELS[n]}</small>
+          {n}<small>{FATIGUE_LABELS[n]} ×{fatigueMult(n)}</small>
         </button>
       ))}
     </div>
@@ -255,7 +257,8 @@ function EndSession() {
   const { open } = useApp();
   if (!s) return <Shell title="没有进行中的 Session">当前没有进行中的 Session。</Shell>;
   const runStart = state.sessions.filter((x) => x.runId === s.runId)[0]?.startedAt ?? s.startedAt;
-  const tokens = runSegmentsTokens(state, s.runId);
+  const fatNow = latestFatigue(state);
+  const tokens = runSegmentsTokens(state, s.runId, undefined, fat);
   return (
     <Shell
       title={<><span className="green">⏺</span> 结束 Session</>}
@@ -270,7 +273,10 @@ function EndSession() {
       }}
     >
       <label className="field"><span>这次推进了什么</span><input data-autofocus value={outcome} onChange={(e) => setOutcome(e.target.value)} placeholder="一句话结果（可选）" /></label>
-      <div className="field"><span>疲劳自评（可选）</span><FatiguePicker v={fat} set={setFat} /></div>
+      <div className="field">
+        <span>疲劳自评（{fatNow ? `不选则沿用底栏的 ${fatNow}/5 ×${fatigueMult(fatNow)}` : '可选，不选按 ×1 计'}；决定这次 Session 的 token 倍率）</span>
+        <FatiguePicker v={fat} set={(n) => setFat(fat === n ? null : n)} />
+      </div>
       <button type="button" className="toggle" role="checkbox" aria-checked={doCompact} disabled={!s.wsId} onClick={() => setDoCompact(!doCompact)}>
         <span className="tb">[{doCompact ? 'x' : ' '}]</span> 结束后生成 Compact 快照，方便下次 Resume
       </button>

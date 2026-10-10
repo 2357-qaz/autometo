@@ -66,6 +66,22 @@ describe('interactive app', () => {
     t.unmount();
   });
 
+  it('keeps the prompt and status line at the bottom: menus and forms open above them', async () => {
+    const t = setup(true);
+    await t.type('/');
+    let rows = t.last().trimEnd().split('\n');
+    const promptRow = rows.findIndex((l) => l.includes('> /'));
+    expect(rows.findIndex((l) => l.includes('/phase'))).toBeLessThan(promptRow);
+    expect(rows.at(-1)).toContain('Sonnet');
+    await t.key(ESC);
+    await t.type('/session');
+    await t.key(ENTER);
+    rows = t.last().trimEnd().split('\n');
+    expect(rows.findIndex((l) => l.includes('开始专注 Session'))).toBeLessThan(rows.findIndex((l) => l.includes('正在填写上方的表单')));
+    expect(rows.at(-1)).toContain('Sonnet');
+    t.unmount();
+  });
+
   it('suggests and runs slash commands, prints errors inline', async () => {
     const t = setup(true);
     await wait();

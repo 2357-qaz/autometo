@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import type { Output } from '../ctx';
 import { useApp } from '../ctx';
 import { matchCommands, needsArg } from '@automedo/core';
-import { activeSession, latestFatigue, runSegmentsTokens, runStartedAt, TIERS, type BudgetLevel } from '@automedo/core';
+import { activeSession, fatigueMult, latestFatigue, runSegmentsTokens, runStartedAt, TIERS, type BudgetLevel } from '@automedo/core';
 import { currentWs } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
 import { useSyncStatus } from '../sync';
@@ -247,8 +247,8 @@ export const Bottom = forwardRef<PromptHandle, {
           {budgetLevel === 'low' && ` · ${budgetLeft}% left`}
         </span>
         <span className="sep">·</span>
-        <button className={`sl ${fat && fat >= 4 ? 'yellow' : 'dim'}`} title="疲劳自评 1–5（点击填写）" onClick={() => (ta.current && (setV('/fatigue '), ta.current.focus()))}>
-          {fat ? `疲劳 ${fat}/5` : '疲劳 –'}
+        <button className={`sl ${fat && fat >= 4 ? 'yellow' : 'dim'}`} title="疲劳自评 1–5（点击填写）：越累 token 越贵，×1 / ×1.25 / ×2 / ×4 / ×8" onClick={() => (ta.current && (setV('/fatigue '), ta.current.focus()))}>
+          {fat ? `疲劳 ${fat}/5${fatigueMult(fat) > 1 ? ` ×${fatigueMult(fat)}` : ''}` : '疲劳 –'}
         </button>
         <span className="sep">·</span>
         <SyncIndicator />

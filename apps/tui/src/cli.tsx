@@ -177,6 +177,9 @@ async function interactive() {
     const fresh = reloadState(); // state + that process's sync meta
     if (fresh) store.mutate(null, (d) => void Object.assign(d, { ...fresh, ui: { ...d.ui, ...fresh.ui } }));
   });
+  // Start at the bottom of the terminal (what was on screen scrolls up into history),
+  // so the prompt and status line sit on the last rows from the first frame.
+  process.stdout.write('\n'.repeat(Math.max(0, (process.stdout.rows ?? 0) - 1)));
   const ink = render(<App store={store} sync={sync} loadError={loaded.error} />, { exitOnCtrlC: false });
   await ink.waitUntilExit();
   unwatch();

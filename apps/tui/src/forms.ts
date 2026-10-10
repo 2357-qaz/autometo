@@ -7,6 +7,8 @@ import {
   EFFORT_ORDER,
   EFFORTS,
   FATIGUE_LABELS,
+  fatigueMult,
+  latestFatigue,
   findWs,
   generateCompact,
   ops,
@@ -111,7 +113,7 @@ export function formFor(intent: Intent, store: Store, sync: SyncClient): FormSpe
       return {
         title: '开始专注 Session',
         color: '#d97757',
-        desc: `今天以什么档位工作？${ws ? `关联「${ws.title}」` : ''}`,
+        desc: `今天以什么档位工作？${ws ? `关联「${ws.title}」` : ''}${fatigueMult(latestFatigue(s)) > 1 ? `（疲劳 ${latestFatigue(s)}/5：token ×${fatigueMult(latestFatigue(s))}）` : ''}`,
         fields: [
           { kind: 'text', key: 'intent', label: '这次要做什么', initial: active?.title ?? (ws?.kind === 'goal' ? ws.nextAction : '') },
           { kind: 'select', key: 'tier', label: '模型档位', initial: s.hie.tier, options: TIER_ORDER.map((t) => ({ value: t, label: `${TIERS[t].label} · ${TIERS[t].rate}/min`, hint: TIERS[t].hint })) },
@@ -131,7 +133,16 @@ export function formFor(intent: Intent, store: Store, sync: SyncClient): FormSpe
         desc: `已专注 · ↑ ${runSegmentsTokens(s, cur.runId).toLocaleString()} tokens`,
         fields: [
           { kind: 'text', key: 'outcome', label: '这次推进了什么', placeholder: '一句话结果（可选）' },
-          { kind: 'select', key: 'fatigue', label: '疲劳自评', initial: '0', options: [{ value: '0', label: '跳过' }, ...[1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: `${n} ${FATIGUE_LABELS[n]}` }))] },
+          {
+            kind: 'select',
+            key: 'fatigue',
+            label: '疲劳自评（决定这次的 token 倍率）',
+            initial: '0',
+            options: [
+              { value: '0', label: (() => { const f = latestFatigue(s); return f ? `沿用底栏 · ${f}/5 ×${fatigueMult(f)}` : '跳过 · ×1'; })() },
+              ...[1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: `${n} ${FATIGUE_LABELS[n]} ×${fatigueMult(n)}` })),
+            ],
+          },
           ...(cur.wsId ? [{ kind: 'confirm' as const, key: 'compact', label: '结束后生成 Compact 快照', initial: true }] : []),
         ],
         submit: (v) => {

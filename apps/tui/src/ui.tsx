@@ -1,7 +1,7 @@
 // The interactive terminal UI. History is printed once into the terminal's own
 // scrollback (<Static>); only the bottom area (spinner, todos, prompt, status) redraws.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Box, Static, Text, useApp, useInput, useStdout, type Key } from 'ink';
+import { Box, measureElement, Static, Text, useApp, useInput, useStdout, type DOMElement, type Key } from 'ink';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,7 @@ import {
   fmtAgo,
   fmtTokens,
   hieAdvice,
+  fatigueMult,
   latestFatigue,
   matchCommands,
   needsArg,
@@ -31,7 +32,7 @@ import {
   type SyncStatus,
   type Workspace,
 } from '@automedo/core';
-import { bar, C, dockLines, pad, effortSegs, eventLines, helpLines, historyBlocks, planDiffLines, tierSegs, welcomeLines, wsHeaderLines, type Line, type Seg } from './format';
+import { bar, C, displayWidth, dockLines, pad, effortSegs, eventLines, helpLines, historyBlocks, planDiffLines, tierSegs, welcomeLines, wsHeaderLines, type Line, type Seg } from './format';
 import { formFor, type Field, type FormSpec, type SubmitResult, type Values } from './forms';
 import { editLine, emptyLine, lineFrom, type LineState } from './lineedit';
 
@@ -132,22 +133,30 @@ function StatusLine({ state, sync, notice }: { state: AppState; sync: SyncClient
     : st.phase === 'error' ? { t: `✗ ${st.error ?? '同步失败'}`, c: C.red }
     : { t: `✓ 已同步${st.lastSyncAt ? ` ${fmtAgo(st.lastSyncAt)}` : ''}`, c: C.dim };
   const dot: Seg = { t: ' · ', c: C.faint };
-  const right: Seg[] = [
-    ...tierSegs(state.hie.tier),
-    dot,
-    ...effortSegs(state.hie.effort),
-    dot,
+  const budgetSegs: Seg[] = [
     { t: bar(used / budget, 6), c: lvl === 'ok' ? C.dim : lvl === 'warn' ? C.yellow : C.red },
     { t: ` ${fmtTokens(used)}/${fmtTokens(budget)}`, c: lvl === 'ok' ? C.dim : lvl === 'warn' ? C.yellow : C.red },
-    dot,
-    { t: fat ? `疲劳 ${fat}/5` : '疲劳 –', c: fat && fat >= 4 ? C.yellow : C.dim },
-    dot,
-    syncSeg,
   ];
+  const fatigueSeg: Seg = { t: fat ? `疲劳 ${fat}/5${fatigueMult(fat) > 1 ? ` ×${fatigueMult(fat)}` : ''}` : '疲劳 –', c: fat && fat >= 4 ? C.yellow : C.dim };
+  const join = (groups: Seg[][]) => groups.flatMap((g, i) => (i ? [dot, ...g] : g));
   const mode = state.ui.mode;
-  const narrow = cols < 100;
-  const shown = narrow ? right.filter((_x, i) => !(i >= 4 && i <= 6)) : right; // drop the budget bar when narrow
   const message = notice ?? advice;
+  const modeText = mode === 'plan' ? '⏸ plan mode on' : '⏵⏵ goal mode on';
+  const width = (segs: Seg[]) => segs.reduce((a, x) => a + displayWidth(x.t), 0);
+  // Drop the least important parts until both halves fit on one line.
+  const variants = [
+    { tab: true, help: !message, budget: true },
+    { tab: true, help: false, budget: true },
+    { tab: false, help: false, budget: true },
+    { tab: false, help: false, budget: false },
+  ];
+  const build = (v: (typeof variants)[number]) => ({
+    v,
+    right: join([tierSegs(state.hie.tier), effortSegs(state.hie.effort), ...(v.budget ? [budgetSegs] : []), [fatigueSeg], [syncSeg]]),
+    left: displayWidth(modeText) + (v.tab ? 12 : 0) + (v.help ? 17 : 0),
+  });
+  const fit = variants.map(build).find((x) => x.left + 2 + width(x.right) + 2 <= cols) ?? build(variants[variants.length - 1]);
+  const shown = fit.right;
   return (
     <Box flexDirection="column">
       {message ? (
@@ -159,9 +168,9 @@ function StatusLine({ state, sync, notice }: { state: AppState; sync: SyncClient
       ) : null}
       <Box justifyContent="space-between" paddingX={1}>
         <Text wrap="truncate-end">
-          <Text color={mode === 'plan' ? C.teal : C.violet}>{mode === 'plan' ? '⏸ plan mode on' : '⏵⏵ goal mode on'}</Text>
-          {narrow ? null : <Text color={C.faint}> (shift+tab)</Text>}
-          {message ? null : <Text color={C.faint}>  ? for shortcuts</Text>}
+          <Text color={mode === 'plan' ? C.teal : C.violet}>{modeText}</Text>
+          {fit.v.tab ? <Text color={C.faint}> (shift+tab)</Text> : null}
+          {fit.v.help ? <Text color={C.faint}>  ? for shortcuts</Text> : null}
         </Text>
         <Text wrap="truncate-start">
           {shown.map((x, i) => (
@@ -438,6 +447,25 @@ function introBlocks(state: AppState, loadError: string | null): Block[] {
   return out;
 }
 
+/**
+ * Keep the prompt and status line on the terminal's last rows. Ink appends below the
+ * transcript, so a live area that shrinks (a menu or form closing) would pull them up.
+ * Track the highest the output has reached (transcript lines + live area) and pad the
+ * top of the live area up to it; new transcript lines use up that padding in the same frame.
+ */
+function useBottomPin(blocks: Block[], rows: number) {
+  const ref = useRef<DOMElement>(null);
+  const printed = useMemo(() => blocks.reduce((a, b) => a + b.lines.length, 0), [blocks]);
+  const [top, setTop] = useState(0);
+  useEffect(() => setTop(0), [rows]); // re-measure after a resize
+  useEffect(() => {
+    if (!ref.current) return;
+    const reach = printed + measureElement(ref.current).height;
+    if (reach > top) setTop(reach);
+  });
+  return { ref, minHeight: Math.max(0, Math.min(top - printed, rows - 1)) };
+}
+
 export function App({ store, sync, loadError = null }: { store: Store; sync: SyncClient; loadError?: string | null }) {
   const state = useStore(store);
   const { exit } = useApp();
@@ -612,58 +640,67 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
 
   const placeholder = !ws ? (state.ui.mode === 'plan' ? '输入计划标题并回车，或 /help' : '输入目标并回车，或 /help') : state.ui.mode === 'plan' ? '添加任务…  / 命令  # 记录' : '添加行动…  / 命令  # 记录';
 
+  const pin = useBottomPin(blocks, (stdout as NodeJS.WriteStream).rows ?? 30);
+  const formOpen = !!intent && (intent.type === 'switch' || !!spec);
+
+  // Order matters: everything that comes and goes sits ABOVE the prompt, so the prompt
+  // box and the status line (model · effort · budget · fatigue · sync) stay at the bottom.
   return (
     <>
       <Static items={blocks}>{(b) => <Lines key={b.key} lines={b.lines} />}</Static>
-      <Spinner state={state} />
-      {ws && (
-        <Box marginTop={activeSession(state) ? 0 : 1}>
-          <Lines lines={dockLines(ws)} />
-        </Box>
-      )}
-      {intent?.type === 'switch' ? (
-        <Picker
-          state={state}
-          onClose={() => setIntent(null)}
-          onPick={(w) => {
-            setIntent(null);
-            store.mutate(null, (d) => ops.selectWs(d, w.id));
-          }}
-          onDelete={(w) =>
-            setIntent({
-              type: 'confirm',
-              title: `删除「${w.title}」？`,
-              message: '任务、日志、版本和快照会一起删除。之后可以 ctrl+z 撤销。',
-              confirmLabel: '删除',
-              danger: true,
-              onConfirm: () => store.mutate('删除', (d) => ops.deleteWs(d, w.id)),
-            })
-          }
-        />
-      ) : spec ? (
-        <Form key={JSON.stringify({ ...intent, onConfirm: undefined })} spec={spec} onDone={closeForm} />
-      ) : (
-        <>
-          <Box borderStyle="round" borderColor={C.faint} paddingX={1} marginTop={1}>
-            <Text color={C.dim}>&gt; </Text>
-            <Cursorline st={line} placeholder={placeholder} />
-          </Box>
-          {showSugs && (
-            <Box flexDirection="column" paddingX={2}>
-              {sugs.slice(0, 10).map((c, i) => (
-                <Text key={c.name}>
-                  <Text color={i === sel ? C.accent : C.fg2} bold={i === sel}>
-                    {pad(`/${c.name}`, 14)}
-                  </Text>
-                  <Text color={C.faint}>{pad(c.args ?? '', 26)}</Text>
-                  <Text color={i === sel ? C.fg2 : C.dim}>{c.desc}</Text>
-                </Text>
-              ))}
+      <Box flexDirection="column" justifyContent="flex-end" minHeight={pin.minHeight}>
+        <Box ref={pin.ref} flexDirection="column">
+          <Spinner state={state} />
+          {ws && (
+            <Box marginTop={activeSession(state) ? 0 : 1}>
+              <Lines lines={dockLines(ws)} />
             </Box>
           )}
-        </>
-      )}
-      <StatusLine state={state} sync={sync} notice={notice} />
+          {intent?.type === 'switch' ? (
+            <Picker
+              state={state}
+              onClose={() => setIntent(null)}
+              onPick={(w) => {
+                setIntent(null);
+                store.mutate(null, (d) => ops.selectWs(d, w.id));
+              }}
+              onDelete={(w) =>
+                setIntent({
+                  type: 'confirm',
+                  title: `删除「${w.title}」？`,
+                  message: '任务、日志、版本和快照会一起删除。之后可以 ctrl+z 撤销。',
+                  confirmLabel: '删除',
+                  danger: true,
+                  onConfirm: () => store.mutate('删除', (d) => ops.deleteWs(d, w.id)),
+                })
+              }
+            />
+          ) : spec ? (
+            <Form key={JSON.stringify({ ...intent, onConfirm: undefined })} spec={spec} onDone={closeForm} />
+          ) : (
+            <>
+              {showSugs && (
+                <Box flexDirection="column" paddingX={2} marginTop={1}>
+                  {sugs.slice(0, 10).map((c, i) => (
+                    <Text key={c.name}>
+                      <Text color={i === sel ? C.accent : C.fg2} bold={i === sel}>
+                        {pad(`/${c.name}`, 14)}
+                      </Text>
+                      <Text color={C.faint}>{pad(c.args ?? '', 26)}</Text>
+                      <Text color={i === sel ? C.fg2 : C.dim}>{c.desc}</Text>
+                    </Text>
+                  ))}
+                </Box>
+              )}
+            </>
+          )}
+          <Box borderStyle="round" borderColor={formOpen ? C.faint : C.dim} paddingX={1} marginTop={showSugs ? 0 : 1}>
+            <Text color={C.dim}>&gt; </Text>
+            {formOpen ? <Text color={C.faint}>{intent?.type === 'switch' ? '↑ 选择 Plan / Goal · esc 关闭' : '↑ 正在填写上方的表单 · esc 取消'}</Text> : <Cursorline st={line} placeholder={placeholder} />}
+          </Box>
+          <StatusLine state={state} sync={sync} notice={notice} />
+        </Box>
+      </Box>
     </>
   );
 }

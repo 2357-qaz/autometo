@@ -218,7 +218,7 @@ export const COMMANDS: Command[] = [
       return mut(c, '切换强度', (d) => ops.setEffort(d, e));
     },
   },
-  { name: 'fatigue', args: '<1-5>', desc: '疲劳自评（1 精力充沛 · 5 需要休息）', run: (a, c) => mut(c, '疲劳自评', (d) => ops.markFatigue(d, Number(a))) },
+  { name: 'fatigue', args: '<1-5>', desc: '疲劳自评（1 精力充沛 · 5 需要休息；越累 token 越贵）', run: (a, c) => mut(c, '疲劳自评', (d) => ops.markFatigue(d, Number(a))) },
   { name: 'budget', args: '<数量>', desc: '设置每日 Token 预算，如 /budget 150k', run: (a, c) => mut(c, '设置预算', (d) => ops.setBudget(d, ops.parseTokenAmount(a))) },
   {
     name: 'compact',
