@@ -1,13 +1,13 @@
-import type { Dialog } from './dialogs';
+import type { Intent } from './intents';
 import type { Store } from './store';
-import { activeGoal, activePlan, currentWs } from './store';
+import { activeGoal, activePlan, currentWs } from './state';
 import { activeSession, EFFORT_ORDER, TIER_ORDER } from './hie';
 import * as ops from './ops';
 import type { Effort, Tier } from './types';
 
 export interface CmdCtx {
   store: Store;
-  open: (d: Dialog) => void;
+  open: (d: Intent) => void;
   exportData: () => void;
   importData: () => void;
   showDiff: (planId: string, version?: number) => void;

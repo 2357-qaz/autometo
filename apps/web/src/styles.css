@@ -446,3 +446,14 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .toggle .tb { color: var(--accent); font-weight: 700; margin-right: 0.4em; }
 .toggle:hover { color: var(--fg); }
 .toggle:disabled { opacity: 0.4; cursor: default; }
+
+/* ───────── workspace delete / archive ───────── */
+.ws-actions { margin-left: auto; display: flex; gap: 10px; font-size: 12px; font-weight: 400; opacity: 0; transition: opacity 0.1s; }
+.ws-head:hover .ws-actions, .ws-actions:focus-within { opacity: 1; }
+.pick { grid-template-columns: 26px minmax(0, 1fr) minmax(0, 1.2fr) auto; }
+.pick-del { order: 4; visibility: hidden; }
+.pick[aria-selected='true'] .pick-del, .pick:hover .pick-del { visibility: visible; }
+@media (max-width: 720px), (hover: none) {
+  .ws-actions { opacity: 1; }
+  .pick-del { visibility: visible; }
+}

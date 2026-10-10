@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from 'react';
-import type { Goal, Plan, Workspace } from '../types';
+import type { Goal, Plan, Workspace } from '@automedo/core';
 import { useApp } from '../ctx';
-import * as ops from '../ops';
-import { diffPlan, diffSummary } from '../diff';
-import { bar, fmtAgo, fmtDate } from '../util';
+import { ops } from '@automedo/core';
+import { diffPlan, diffSummary } from '@automedo/core';
+import { bar, fmtAgo, fmtDate } from '@automedo/core';
 import { AddRow, InlineEdit } from './Inline';
 import { DoneLine, TaskRow } from './TaskRow';
+import { useConfirmDeleteWs } from './Dialogs';
 
 const VERDICT: Record<string, string> = { 'on-track': '顺利', drifting: '偏航', blocked: '受阻', pivot: '转向' };
 
@@ -47,6 +48,7 @@ function PlanHead({ plan, sel, setSel, onDiff }: { plan: Plan; sel: string | nul
       <div className="ws-title">
         <InlineEdit value={plan.title} ariaLabel="计划标题" onSave={(v) => act('重命名', (d) => ops.updatePlan(d, plan.id, { title: v }))} />
         {plan.status !== 'active' && <span className="tag">{plan.status}</span>}
+        <WsActions ws={plan} />
       </div>
       <div className="ws-meta">
         {phase && (
@@ -189,6 +191,7 @@ function GoalHead({ goal, sel, setSel }: { goal: Goal; sel: string | null; setSe
       <div className="ws-title">
         <InlineEdit value={goal.title} ariaLabel="目标标题" onSave={(v) => act('重命名', (d) => ops.updateGoal(d, goal.id, { title: v }))} />
         {goal.status !== 'active' && <span className="tag">{goal.status}</span>}
+        <WsActions ws={goal} />
       </div>
       <div className="ws-meta">
         {last ? (
@@ -259,5 +262,20 @@ function GoalHead({ goal, sel, setSel }: { goal: Goal; sel: string | null; setSe
         ]}
       />
     </div>
+  );
+}
+
+/** Archive / delete for the open Plan or Goal; shown on hover of the title row. */
+function WsActions({ ws }: { ws: Workspace }) {
+  const { act } = useApp();
+  const confirmDelete = useConfirmDeleteWs();
+  const archived = ws.status === 'archived';
+  return (
+    <span className="ws-actions">
+      <button className="btn ghost" onClick={() => act(archived ? '恢复' : '归档', (d) => ops.setWsStatus(d, ws.id, archived ? 'active' : 'archived'))}>
+        {archived ? '恢复' : '归档'}
+      </button>
+      <button className="btn ghost danger" onClick={() => confirmDelete(ws)}>删除</button>
+    </span>
   );
 }

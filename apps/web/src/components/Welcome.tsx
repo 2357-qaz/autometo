@@ -1,4 +1,4 @@
-import type { Mode } from '../types';
+import type { Mode } from '@automedo/core';
 import { useApp } from '../ctx';
 import { Mascot } from './Mascot';
 

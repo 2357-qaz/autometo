@@ -3,7 +3,7 @@
 // Every meaningful change emits a structured event into the workspace's Execution Log.
 import type { AppState, Checkpoint, DiffLine, Effort, Goal, LogEntry, Plan, PlanVersion, Session, Task, TaskStatus, Tier, Workspace } from './types';
 import { activeSession, focusedMsBetween, sessionTokens, tokensBetween, TIERS } from './hie';
-import { activeGoal, activePlan, currentWs, findWs } from './store';
+import { activeGoal, activePlan, currentWs, findWs } from './state';
 import { DAY, uid } from './util';
 
 export class UserError extends Error {}

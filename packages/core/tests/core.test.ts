@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { emptyState, normalize, createStore } from '../src/store';
+import { emptyState, normalize } from '../src/state';
+import { createStore } from '../src/store';
 import * as ops from '../src/ops';
 import { execute, type CmdCtx } from '../src/commands';
 import { budgetLevel, estimateTokens, tokensToday } from '../src/hie';
@@ -8,9 +9,9 @@ import { seedDemo } from '../src/demo';
 import { diffPlan, diffSummary } from '../src/diff';
 
 const mkCtx = () => {
-  const store = createStore(emptyState(), false);
+  const store = createStore(emptyState());
   const open = vi.fn();
-  const ctx: CmdCtx = { store, open, exportData: vi.fn(), importData: vi.fn() };
+  const ctx: CmdCtx = { store, open, exportData: vi.fn(), importData: vi.fn(), showDiff: vi.fn() };
   return { store, open, ctx };
 };
 
@@ -213,5 +214,22 @@ describe('execution log & plan diff', () => {
     const n = normalize(raw);
     expect(n.plans[0].versions).toEqual([]);
     expect(n.plans[0].log.map((e) => e.type)).toEqual(['legacy', 'revise']);
+  });
+});
+
+describe('workspace deletion', () => {
+  it('deletes a plan with its compacts and is undoable through the store', () => {
+    const { store, ctx } = mkCtx();
+    execute('/plan A', ctx);
+    execute('/goal B', ctx);
+    const planId = store.get().plans[0].id;
+    store.mutate('compact', (d) => ops.saveCompact(d, planId, 'snapshot'));
+    store.mutate('删除', (d) => ops.deleteWs(d, planId));
+    expect(store.get().plans).toHaveLength(0);
+    expect(store.get().compacts).toHaveLength(0);
+    expect(store.get().ui.activePlanId).toBeNull();
+    expect(store.get().goals).toHaveLength(1);
+    store.undo();
+    expect(store.get().plans[0].id).toBe(planId);
   });
 });

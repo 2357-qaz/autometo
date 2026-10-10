@@ -1,5 +1,5 @@
 import { useApp } from '../ctx';
-import { currentWs } from '../store';
+import { currentWs } from '@automedo/core';
 
 export function Header() {
   const { state, open } = useApp();

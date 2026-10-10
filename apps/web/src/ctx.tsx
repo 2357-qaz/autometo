@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react';
-import type { Dialog } from './dialogs';
-import type { Store } from './store';
-import type { AppState } from './types';
+import type { Intent as Dialog } from '@automedo/core';
+import type { Store } from '@automedo/core';
+import type { AppState } from '@automedo/core';
 
 export interface Output {
   cmd: string;

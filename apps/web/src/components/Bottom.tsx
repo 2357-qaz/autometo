@@ -1,11 +1,11 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { Output } from '../ctx';
 import { useApp } from '../ctx';
-import { matchCommands } from '../commands';
-import { activeSession, latestFatigue, runSegmentsTokens, runStartedAt, TIERS, type BudgetLevel } from '../hie';
-import { currentWs } from '../store';
+import { matchCommands } from '@automedo/core';
+import { activeSession, latestFatigue, runSegmentsTokens, runStartedAt, TIERS, type BudgetLevel } from '@automedo/core';
+import { currentWs } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
-import { bar, fmtDuration, fmtTokens } from '../util';
+import { bar, fmtDuration, fmtTokens } from '@automedo/core';
 
 export interface PromptHandle {
   focus: (prefill?: string) => void;

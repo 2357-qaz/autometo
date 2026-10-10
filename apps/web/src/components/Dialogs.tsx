@@ -1,13 +1,13 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import type { Dialog } from '../dialogs';
+import type { Intent as Dialog } from '@automedo/core';
 import { useApp } from '../ctx';
-import { COMMANDS } from '../commands';
-import { generateCompact } from '../compact';
-import { activeSession, EFFORT_ORDER, EFFORTS, estimateTokens, FATIGUE_LABELS, runSegmentsTokens, TIER_ORDER, TIERS, tokensToday } from '../hie';
-import * as ops from '../ops';
-import { activePlan, currentWs, findWs } from '../store';
-import type { Effort, Tier, Verdict, Workspace } from '../types';
-import { fmtAgo, fmtDuration, fmtTokens } from '../util';
+import { COMMANDS } from '@automedo/core';
+import { generateCompact } from '@automedo/core';
+import { activeSession, EFFORT_ORDER, EFFORTS, estimateTokens, FATIGUE_LABELS, runSegmentsTokens, TIER_ORDER, TIERS, tokensToday } from '@automedo/core';
+import { ops } from '@automedo/core';
+import { activePlan, currentWs, findWs } from '@automedo/core';
+import type { Effort, Tier, Verdict, Workspace } from '@automedo/core';
+import { fmtAgo, fmtDuration, fmtTokens } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
 
 function Shell(props: { title: ReactNode; desc?: ReactNode; wide?: boolean; onSubmit?: () => void; children: ReactNode; actions?: ReactNode; submitLabel?: string; danger?: boolean; error?: string | null }) {
@@ -506,6 +506,7 @@ function wsMeta(w: Workspace): string {
 /** Workspace picker, like Claude Code's /resume list. */
 function Switcher() {
   const { state, store, close, open, run } = useApp();
+  const confirmDeleteWs = useConfirmDeleteWs();
   const [q, setQ] = useState('');
   const cur = currentWs(state);
   const ORDER = { active: 0, paused: 1, done: 2, archived: 3 } as const;
@@ -543,6 +544,7 @@ function Switcher() {
             if (e.key === 'ArrowDown') { e.preventDefault(); setIdx((i) => Math.min(all.length - 1, i + 1)); }
             if (e.key === 'ArrowUp') { e.preventDefault(); setIdx((i) => Math.max(0, i - 1)); }
             if (e.key === 'Enter') { e.preventDefault(); pick(all[idx]); }
+            if (e.key === 'Delete' && all[idx]) { e.preventDefault(); confirmDeleteWs(all[idx]); }
           }}
         />
       </div>
@@ -550,6 +552,17 @@ function Switcher() {
         {all.length === 0 && <div className="faint">{q ? '没有匹配项' : '还没有 Plan 或 Goal'}</div>}
         {all.map((w, i) => (
           <div key={w.id} role="option" aria-selected={i === idx} className={`pick ${w.status !== 'active' ? 'muted' : ''}`} onMouseEnter={() => setIdx(i)} onClick={() => pick(w)}>
+            <button
+              type="button"
+              className="btn ghost danger pick-del"
+              title="删除（Delete），可撤销"
+              onClick={(e) => {
+                e.stopPropagation();
+                confirmDeleteWs(w);
+              }}
+            >
+              删除
+            </button>
             <span className={w.kind === 'plan' ? 'teal' : 'violet'}>{w.kind === 'plan' ? '⏸' : '⏵⏵'}</span>
             <span className="t">{w.title}{w.id === cur?.id && <span className="faint"> (当前)</span>}</span>
             <span className="faint m">{w.status !== 'active' ? `${w.status} · ` : ''}{wsMeta(w)}</span>
@@ -605,4 +618,18 @@ function AsciiSlider({ value, onChange, label, step = 5, cells = 20 }: { value: 
       <span className="as-val">{value}%</span>
     </div>
   );
+}
+
+/** Shared "delete this Plan/Goal" flow: confirm first, then an undoable delete. */
+export function useConfirmDeleteWs() {
+  const { open, act } = useApp();
+  return (w: Workspace) =>
+    open({
+      type: 'confirm',
+      title: `删除「${w.title}」？`,
+      message: `这个 ${w.kind === 'plan' ? 'Plan' : 'Goal'} 的任务、日志、版本和快照会一起删除。删除后可以撤销（Ctrl+Z）。`,
+      confirmLabel: '删除',
+      danger: true,
+      onConfirm: () => void act('删除', (d) => ops.deleteWs(d, w.id)),
+    });
 }

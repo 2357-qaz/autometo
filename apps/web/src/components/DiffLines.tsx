@@ -1,4 +1,4 @@
-import type { DiffLine } from '../types';
+import type { DiffLine } from '@automedo/core';
 
 /** Claude-Code-style edit diff: number gutter, sign, text, trailing note. */
 export function DiffLines({ lines }: { lines: DiffLine[] }) {

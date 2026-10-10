@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import type { Workspace } from '../types';
+import type { Workspace } from '@automedo/core';
 import { useApp } from '../ctx';
-import { activeSession } from '../hie';
-import * as ops from '../ops';
+import { activeSession } from '@automedo/core';
+import { ops } from '@automedo/core';
 import { TaskRow } from './TaskRow';
 import { Mascot } from './Mascot';
 

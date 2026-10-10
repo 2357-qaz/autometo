@@ -1,9 +1,9 @@
 import { useState, type ReactNode } from 'react';
-import type { DiffLine, LogEntry, Plan, Session, Workspace } from '../types';
+import type { DiffLine, LogEntry, Plan, Session, Workspace } from '@automedo/core';
 import { useApp } from '../ctx';
-import { diffPlan } from '../diff';
+import { diffPlan } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
-import { fmtDate, fmtDuration, fmtTokens, startOfDay } from '../util';
+import { fmtDate, fmtDuration, fmtTokens, startOfDay } from '@automedo/core';
 import { DiffLines } from './DiffLines';
 
 type Block =

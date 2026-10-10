@@ -1,6 +1,6 @@
-import type { Task, TaskStatus } from '../types';
+import type { Task, TaskStatus } from '@automedo/core';
 import { useApp } from '../ctx';
-import * as ops from '../ops';
+import { ops } from '@automedo/core';
 import { InlineEdit } from './Inline';
 
 export const GLYPH: Record<TaskStatus, string> = {

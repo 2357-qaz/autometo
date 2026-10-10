@@ -1,5 +1,5 @@
-import type { Effort, Tier } from '../types';
-import { TIERS } from '../hie';
+import type { Effort, Tier } from '@automedo/core';
+import { TIERS } from '@automedo/core';
 
 const EFFORT_LEVEL: Record<Effort, number> = { low: 1, medium: 2, high: 3 };
 
