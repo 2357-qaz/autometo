@@ -108,16 +108,6 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .done-line { display: block; background: none; border: 0; padding: 2px 2px; cursor: pointer; font-size: 12.5px; text-align: left; }
 .done-line:hover .faint { color: var(--fg-2); }
 
-.btn {
-  background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 2px 10px;
-  color: var(--fg-2); cursor: pointer; font-size: 12.5px; white-space: nowrap;
-}
-.btn:hover { border-color: var(--line-2); color: var(--fg); background: var(--panel); }
-.btn.primary { border-color: var(--accent); color: var(--accent); }
-.btn.primary:hover { background: var(--accent-soft); }
-.btn.danger:hover { border-color: var(--red); color: var(--red); }
-.btn.ghost { border-color: transparent; color: var(--dim); }
-.btn:disabled { opacity: 0.4; cursor: default; }
 .kbd { display: inline-block; border: 1px solid var(--line-2); border-radius: 3px; padding: 0 4px; font-size: 11px; color: var(--fg-2); line-height: 1.45; }
 .tag { font-size: 11px; font-weight: 400; border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; color: var(--dim); }
 
@@ -224,12 +214,6 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .row > * { flex: 1; min-width: 140px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; align-items: center; }
 .dialog-actions .hint { margin-right: auto; color: var(--faint); font-size: 12px; }
-.seg { display: flex; gap: 6px; flex-wrap: wrap; }
-.seg button {
-  flex: 1; min-width: 90px; text-align: left; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer;
-}
-.seg button small { display: block; color: var(--dim); font-size: 11.5px; }
-.seg button[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-soft); }
 .form-err { color: var(--red); font-size: 12.5px; margin-top: 4px; }
 .help-grid { display: grid; grid-template-columns: max-content 1fr; gap: 3px 18px; font-size: 12.5px; }
 .help-grid .c { color: var(--accent); white-space: nowrap; }
@@ -338,7 +322,6 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .dock-active .title { font-weight: 700; color: var(--accent); overflow-wrap: anywhere; }
 .dock-active.idle .title { color: var(--fg); }
 .dock-btns { display: flex; gap: 4px; margin-left: auto; }
-.dock-btns .btn { padding: 0 8px; font-size: 12px; }
 .dock-foot { display: flex; gap: 14px; font-size: 12px; padding: 1px 2px; }
 .todo-sep { font-size: 11px; padding: 3px 0 0 26px; }
 
@@ -362,12 +345,6 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .ws-switch .faint { color: var(--link); }
 .ws-switch:hover { border-color: var(--accent); }
 
-.btn { border-color: var(--line-2); color: var(--fg); }
-.btn:hover { border-color: var(--link); color: var(--link-hover); background: var(--accent-soft); }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #1a1512; font-weight: 700; }
-.btn.primary:hover { background: #e8896a; border-color: #e8896a; color: #1a1512; }
-.btn.ghost { border-color: transparent; color: var(--link); }
-.btn.ghost:hover { border-color: var(--line-2); }
 .icon-btn { color: var(--dim); }
 .icon-btn:hover { color: var(--link-hover); }
 .task .box { color: var(--fg-2); }
@@ -419,3 +396,53 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .vbtn { border: 0; background: none; padding: 0 3px; }
 .vbtn.on { color: var(--blue); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
 .vbtn:hover { color: var(--link-hover); }
+
+/* ───────── terminal buttons: [ label ] ───────── */
+.btn {
+  background: none; border: 0; border-radius: 0; padding: 0 1px; cursor: pointer; white-space: nowrap;
+  color: var(--link); font-size: 12.5px; line-height: 1.6;
+}
+.btn::before { content: '['; color: var(--faint); margin-right: 0.4em; }
+.btn::after { content: ']'; color: var(--faint); margin-left: 0.4em; }
+.btn:hover, .btn:focus-visible { background: var(--accent-soft); color: var(--link-hover); outline: none; }
+.btn:hover::before, .btn:hover::after { color: var(--link); }
+.btn.primary { color: var(--accent); font-weight: 700; }
+.btn.primary::before, .btn.primary::after { color: var(--accent); }
+.btn.primary:hover, .btn.primary:focus-visible { background: var(--accent); color: #1a1512; }
+.btn.primary:hover::before, .btn.primary:hover::after, .btn.primary:focus-visible::before, .btn.primary:focus-visible::after { color: #1a1512; }
+.btn.ghost { color: var(--dim); }
+.btn.danger:hover, .btn.danger:focus-visible { background: rgba(239, 111, 108, 0.16); color: var(--red); }
+.btn.primary.danger { color: var(--red); }
+.btn.primary.danger::before, .btn.primary.danger::after { color: var(--red); }
+.btn.primary.danger:hover { background: var(--red); color: #1a1512; }
+.btn:disabled { opacity: 0.35; cursor: default; background: none; }
+.dock-btns .btn { padding: 0 1px; font-size: 12.5px; }
+.dock-btns { gap: 10px; }
+.row-btns, .dialog-actions { gap: 14px; }
+
+/* ───────── option lists: ○ / ● instead of cards ───────── */
+.seg { display: flex; flex-direction: column; gap: 1px; }
+.seg.inline { flex-direction: row; flex-wrap: wrap; gap: 4px 16px; }
+.seg button {
+  display: flex; align-items: baseline; gap: 0.6em; background: none; border: 0; padding: 1px 6px; text-align: left;
+  cursor: pointer; color: var(--fg-2); border-radius: 0;
+}
+.seg button::before { content: '○'; color: var(--faint); }
+.seg button[aria-pressed='true']::before { content: '●'; color: var(--accent); }
+.seg button[aria-pressed='true'] { color: var(--fg); background: var(--accent-soft); }
+.seg button:hover { color: var(--fg); background: var(--panel); }
+.seg button small { color: var(--dim); font-size: 11.5px; margin-left: 0.6em; }
+.seg.inline button small { margin-left: 0.3em; }
+
+/* ───────── text controls ───────── */
+.ascii-slider { display: inline-flex; gap: 12px; align-items: baseline; cursor: pointer; user-select: none; padding: 2px 0; }
+.ascii-slider:focus-visible { outline: none; }
+.ascii-slider:focus-visible .as-bar { background: var(--accent-soft); }
+.as-bar { letter-spacing: -1px; font-size: 15px; }
+.as-on { color: var(--violet); }
+.as-off { color: var(--faint); }
+.as-val { color: var(--fg); font-weight: 700; min-width: 4ch; }
+.toggle { background: none; border: 0; padding: 1px 0; cursor: pointer; color: var(--fg-2); text-align: left; font-size: 12.5px; }
+.toggle .tb { color: var(--accent); font-weight: 700; margin-right: 0.4em; }
+.toggle:hover { color: var(--fg); }
+.toggle:disabled { opacity: 0.4; cursor: default; }

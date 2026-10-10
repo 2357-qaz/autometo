@@ -231,9 +231,9 @@ function StartSession({ minutes }: { minutes?: number }) {
 
 function FatiguePicker({ v, set }: { v: number | null; set: (n: number) => void }) {
   return (
-    <div className="seg" role="group" aria-label="疲劳自评">
+    <div className="seg inline" role="group" aria-label="疲劳自评">
       {[1, 2, 3, 4, 5].map((n) => (
-        <button type="button" key={n} aria-pressed={v === n} onClick={() => set(n)} style={{ minWidth: 70 }}>
+        <button type="button" key={n} aria-pressed={v === n} onClick={() => set(n)}>
           {n}<small>{FATIGUE_LABELS[n]}</small>
         </button>
       ))}
@@ -267,10 +267,9 @@ function EndSession() {
     >
       <label className="field"><span>这次推进了什么</span><input data-autofocus value={outcome} onChange={(e) => setOutcome(e.target.value)} placeholder="一句话结果（可选）" /></label>
       <div className="field"><span>疲劳自评（可选）</span><FatiguePicker v={fat} set={setFat} /></div>
-      <label className="row" style={{ alignItems: 'center', gap: 8 }}>
-        <input type="checkbox" style={{ flex: 'none', minWidth: 0 }} checked={doCompact} onChange={(e) => setDoCompact(e.target.checked)} disabled={!s.wsId} />
-        <span className="dim">结束后生成 Compact 快照，方便下次 Resume</span>
-      </label>
+      <button type="button" className="toggle" role="checkbox" aria-checked={doCompact} disabled={!s.wsId} onClick={() => setDoCompact(!doCompact)}>
+        <span className="tb">[{doCompact ? 'x' : ' '}]</span> 结束后生成 Compact 快照，方便下次 Resume
+      </button>
     </Shell>
   );
 }
@@ -324,8 +323,8 @@ function CheckpointForm({ goalId }: { goalId: string }) {
       onSubmit={() => submit('Checkpoint', (d) => ops.addCheckpoint(d, goalId, { progress, verdict, did, learned, next }))}
     >
       <div className="field">
-        <span>主观进度：{progress}%</span>
-        <input type="range" min={0} max={100} step={5} value={progress} onChange={(e) => setProgress(Number(e.target.value))} aria-label="主观进度" />
+        <span>主观进度</span>
+        <AsciiSlider value={progress} onChange={setProgress} label="主观进度" />
       </div>
       <div className="field">
         <span>判断</span>
@@ -558,5 +557,43 @@ function Switcher() {
         ))}
       </div>
     </Shell>
+  );
+}
+
+/** Terminal-style slider: an ASCII bar you can click or drive with ←/→. */
+function AsciiSlider({ value, onChange, label, step = 5, cells = 20 }: { value: number; onChange: (v: number) => void; label: string; step?: number; cells?: number }) {
+  const set = (v: number) => onChange(Math.max(0, Math.min(100, Math.round(v / step) * step)));
+  const full = Math.round((value / 100) * cells);
+  return (
+    <div
+      className="ascii-slider"
+      role="slider"
+      tabIndex={0}
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={value}
+      onKeyDown={(e) => {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowUp') { e.preventDefault(); set(value + step); }
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') { e.preventDefault(); set(value - step); }
+        if (e.key === 'Home') { e.preventDefault(); set(0); }
+        if (e.key === 'End') { e.preventDefault(); set(100); }
+      }}
+      onMouseDown={(e) => {
+        const bar = (e.currentTarget.querySelector('.as-bar') as HTMLElement).getBoundingClientRect();
+        const move = (x: number) => set(((x - bar.left) / bar.width) * 100);
+        move(e.clientX);
+        const mm = (ev: MouseEvent) => move(ev.clientX);
+        const mu = () => { window.removeEventListener('mousemove', mm); window.removeEventListener('mouseup', mu); };
+        window.addEventListener('mousemove', mm);
+        window.addEventListener('mouseup', mu);
+      }}
+    >
+      <span className="as-bar">
+        <span className="as-on">{'█'.repeat(full)}</span>
+        <span className="as-off">{'░'.repeat(cells - full)}</span>
+      </span>
+      <span className="as-val">{value}%</span>
+    </div>
   );
 }
