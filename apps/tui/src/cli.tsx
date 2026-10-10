@@ -15,7 +15,7 @@ import {
 } from '@automedo/core';
 import { toAnsi } from './ansi';
 import { C, dockLines, eventLines, historyBlocks, planDiffLines, wsHeaderLines, type Line } from './format';
-import { filePersist, fileSyncStorage, homeDir, loadState, watchState } from './storage';
+import { attachStore, filePersist, fileSyncStorage, homeDir, loadState, reloadState, watchState } from './storage';
 import { App } from './ui';
 
 const VERSION = '0.2.0';
@@ -68,6 +68,7 @@ async function oneShot(argv: string[]) {
   const loaded = loadState();
   if (loaded.error) fail(loaded.error);
   const store = createStore(loaded.state, filePersist, 0);
+  attachStore(store);
 
   await withSync(store, () => {
     const s = store.get();
@@ -168,12 +169,13 @@ async function interactive() {
   if (!process.stdin.isTTY) fail('交互界面需要在终端里运行。脚本中请使用子命令，例如 automedo status');
   const loaded = loadState();
   const store = createStore(loaded.state, filePersist, 100);
+  attachStore(store);
   const sync = new SyncClient(store, fileSyncStorage);
   sync.start();
   // Another `automedo …` process changed the data file: pick it up.
   const unwatch = watchState(() => {
-    const fresh = loadState();
-    if (!fresh.error) store.mutate(null, (d) => void Object.assign(d, { ...fresh.state, ui: { ...d.ui, ...fresh.state.ui } }));
+    const fresh = reloadState(); // state + that process's sync meta
+    if (fresh) store.mutate(null, (d) => void Object.assign(d, { ...fresh, ui: { ...d.ui, ...fresh.ui } }));
   });
   const ink = render(<App store={store} sync={sync} loadError={loaded.error} />, { exitOnCtrlC: false });
   await ink.waitUntilExit();

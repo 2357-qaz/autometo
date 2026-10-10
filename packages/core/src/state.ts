@@ -33,7 +33,10 @@ export function normalize(raw: unknown): AppState {
     if (!Array.isArray(raw[k])) throw new Error(`缺少字段：${k}`);
   }
   const base = emptyState();
-  const s = raw as unknown as AppState;
+  // Sync bookkeeping belongs to a device, never to imported/exported data.
+  const { syncMeta: _ignored, ...rest } = raw as Record<string, unknown>;
+  void _ignored;
+  const s = rest as unknown as AppState;
   const plans = s.plans.map((p) => ({ ...p, phases: p.phases ?? [], tasks: p.tasks ?? [], versions: p.versions ?? [], log: migrateLog(p.log) }));
   const goals = s.goals.map((g) => ({
     ...g,

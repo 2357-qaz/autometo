@@ -152,6 +152,8 @@ export interface FatigueMark {
 
 export interface Settings {
   dailyBudget: number;
+  /** When the user last changed a setting (decides first-contact sync conflicts). */
+  updatedAt?: number;
 }
 
 export interface AppState {
@@ -162,7 +164,7 @@ export interface AppState {
   compacts: Compact[];
   fatigue: FatigueMark[];
   settings: Settings;
-  hie: { tier: Tier; effort: Effort };
+  hie: { tier: Tier; effort: Effort; updatedAt?: number };
   ui: {
     mode: Mode;
     activePlanId: string | null;

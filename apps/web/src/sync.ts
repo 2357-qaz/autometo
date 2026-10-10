@@ -1,9 +1,9 @@
 // Browser wiring for the shared SyncClient: localStorage-backed config/meta + window events.
 import { useSyncExternalStore } from 'react';
-import { SyncClient, type Store, type SyncConfig, type SyncMeta, type SyncStatus, type SyncStorage } from '@automedo/core';
+import { SyncClient, type Store, type SyncConfig, type SyncStatus, type SyncStorage } from '@automedo/core';
+import { LEGACY_META_KEY, persistence } from './store';
 
 const CONFIG_KEY = 'automedo.sync.config';
-const META_KEY = 'automedo.sync.meta';
 
 function read<T>(key: string): T | null {
   try {
@@ -17,8 +17,12 @@ function read<T>(key: string): T | null {
 const storage: SyncStorage = {
   loadConfig: () => read<SyncConfig>(CONFIG_KEY),
   saveConfig: (c) => (c ? localStorage.setItem(CONFIG_KEY, JSON.stringify(c)) : localStorage.removeItem(CONFIG_KEY)),
-  loadMeta: () => read<SyncMeta>(META_KEY),
-  saveMeta: (m) => localStorage.setItem(META_KEY, JSON.stringify(m)),
+  // Meta lives inside the state document (written together with the state).
+  loadMeta: () => persistence.loadMeta(),
+  saveMeta: (m) => {
+    persistence.saveMeta(m);
+    localStorage.removeItem(LEGACY_META_KEY);
+  },
 };
 
 export function createBrowserSync(store: Store): SyncClient {

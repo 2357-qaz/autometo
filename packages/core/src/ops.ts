@@ -620,6 +620,7 @@ export function addCheckpoint(d: AppState, goalId: string, cp: Omit<Checkpoint, 
 // ───────────────────────── HIE ─────────────────────────
 
 export function setTier(d: AppState, tier: Tier): string {
+  if (d.hie.tier !== tier) d.hie.updatedAt = Date.now();
   d.hie.tier = tier;
   const s = activeSession(d);
   if (s && s.tier !== tier) splitSession(d, s, { tier });
@@ -627,6 +628,7 @@ export function setTier(d: AppState, tier: Tier): string {
 }
 
 export function setEffort(d: AppState, effort: Effort): string {
+  if (d.hie.effort !== effort) d.hie.updatedAt = Date.now();
   d.hie.effort = effort;
   const s = activeSession(d);
   if (s && s.effort !== effort) splitSession(d, s, { effort });
@@ -643,6 +645,7 @@ function splitSession(d: AppState, s: Session, patch: Partial<Pick<Session, 'tie
 export function startSession(d: AppState, opts: { intent: string; plannedMin: number; tier: Tier; effort: Effort }): string {
   if (activeSession(d)) fail('已有进行中的 Session，先 /end 结束它');
   const ws = currentWs(d);
+  if (d.hie.tier !== opts.tier || d.hie.effort !== opts.effort) d.hie.updatedAt = Date.now();
   d.hie.tier = opts.tier;
   d.hie.effort = opts.effort;
   const id = uid();
@@ -703,6 +706,7 @@ export function markFatigue(d: AppState, level: number): string {
 
 export function setBudget(d: AppState, n: number): string {
   if (!(n >= 1000 && n <= 10_000_000)) fail('每日预算需在 1k–10M 之间，例如 /budget 200k');
+  if (d.settings.dailyBudget !== Math.round(n)) d.settings.updatedAt = Date.now();
   d.settings.dailyBudget = Math.round(n);
   return `每日 Cognitive Token 预算 → ${Math.round(n).toLocaleString()}`;
 }

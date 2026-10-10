@@ -321,6 +321,16 @@ export function applySync(
   let changed = false;
   for (const r of response.records) {
     if (editedSince(r.id)) continue;
+    // First contact: a setting this device changed itself (offline, before ever syncing)
+    // competes with the server's by *when it was changed*, not who talks first.
+    if (opts.pullOnly && !r.deleted && (r.kind === 'settings' || r.kind === 'hie')) {
+      const mine = now.get(r.id);
+      if (mine && !isUntouchedDefault(mine)) {
+        const localAt = (mine.data as { updatedAt?: number }).updatedAt ?? 0;
+        const remoteAt = (r.data as { updatedAt?: number } | undefined)?.updatedAt ?? revTime(r.rev);
+        if (localAt > remoteAt) continue; // keep ours; it isn't in base, so it gets pushed next
+      }
+    }
     if (r.deleted) {
       if (merged.delete(r.id)) changed = true;
       delete base[r.id];

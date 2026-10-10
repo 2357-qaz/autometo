@@ -13,3 +13,4 @@ export * as ops from './ops';
 export * from './sync';
 export * from './sync-client';
 export * from './reminders';
+export * from './persistence';

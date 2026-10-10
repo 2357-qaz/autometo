@@ -13,6 +13,11 @@ export interface SyncStorage {
   loadConfig(): SyncConfig | null;
   saveConfig(c: SyncConfig | null): void;
   loadMeta(): SyncMeta | null;
+  /**
+   * Must durably store `m` TOGETHER with the store's current state in one atomic
+   * write (see createDocPersistence) — otherwise a crash can leave a new cursor
+   * next to old data, and the stale data would be pushed as if it were new.
+   */
   saveMeta(m: SyncMeta): void;
 }
 
@@ -178,8 +183,9 @@ export class SyncClient {
         const res0 = await callSync(cfg, pull.request, this.opts.fetchImpl);
         const out0 = applySync(this.store.get(), pull, res0, meta, { pullOnly: true });
         meta = out0.meta;
-        this.storage.saveMeta(meta);
+        // Apply first, then save meta: saveMeta writes meta + current state together.
         if (out0.changed) this.applyRemote(out0.state);
+        this.storage.saveMeta(meta);
       }
     } catch (e) {
       const err = e as SyncError;
@@ -192,8 +198,9 @@ export class SyncClient {
     try {
       const res = await callSync(cfg, prepared.request, this.opts.fetchImpl);
       const out = applySync(this.store.get(), prepared, res, meta);
-      this.storage.saveMeta(out.meta);
+      // Apply first, then save meta: saveMeta writes meta + current state together.
       if (out.changed) this.applyRemote(out.state);
+      this.storage.saveMeta(out.meta);
       this.set({ phase: 'idle', lastSyncAt: Date.now(), error: null, pending: 0 });
     } catch (e) {
       const err = e as SyncError;
