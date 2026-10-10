@@ -372,13 +372,6 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .icon-btn:hover { color: var(--link-hover); }
 .task .box { color: var(--fg-2); }
 
-.statusline { gap: 8px; }
-.statusline .chip {
-  border: 1px solid var(--line); border-radius: 4px; padding: 0 7px; color: var(--fg-2); line-height: 1.6;
-}
-.statusline .chip:hover { border-color: var(--link); color: var(--link-hover); }
-.statusline .chip.mode-plan { color: var(--teal); border-color: rgba(79, 179, 166, 0.45); }
-.statusline .chip.mode-goal { color: var(--violet); border-color: rgba(166, 140, 242, 0.45); }
 .vbtn { color: var(--link); border-color: var(--line-2); }
 .editable:hover { background: var(--panel); box-shadow: inset 0 -1px 0 var(--line-2); }
 
@@ -394,3 +387,35 @@ button, input, textarea, select { font: inherit; color: inherit; }
 @keyframes tomo-hop { 0% { transform: translateY(0); } 40% { transform: translateY(-2px); } 100% { transform: translateY(0); } }
 .dock .mascot { vertical-align: middle; }
 @media (max-width: 720px) { .welcome { gap: 14px; padding: 12px 14px; } }
+
+/* ───────── HIE labels: colour + glyph instead of boxes ───────── */
+.tier { font-weight: 700; }
+.tier-haiku { color: var(--green); }
+.tier-sonnet { color: var(--accent); }
+.tier-opus { color: var(--violet); }
+.effort { color: var(--dim); }
+.effort .eg, .effort .eg-off { letter-spacing: -1px; font-size: 1.2em; line-height: 1; }
+.effort .eg-off { color: var(--faint); }
+.effort-low .eg { color: var(--dim); }
+.effort-medium { color: var(--fg-2); }
+.effort-medium .eg { color: var(--yellow); }
+.effort-high { color: var(--fg); }
+.effort-high .eg { color: var(--accent); }
+.um-meta { font-size: 12px; }
+
+.statusline { gap: 6px; }
+.statusline .sl { background: none; border: 0; padding: 0; font-size: inherit; line-height: inherit; }
+.statusline button.sl { cursor: pointer; }
+.statusline button.sl:hover { text-decoration: underline; text-underline-offset: 3px; filter: brightness(1.25); }
+.statusline .sep { color: var(--faint); }
+.statusline .mode-plan { color: var(--teal); }
+.statusline .mode-goal { color: var(--violet); }
+.statusline > .yellow, .statusline > button.faint { margin-left: 6px; }
+
+/* switcher & version picks: text, not boxes */
+.ws-switch { border: 0; padding: 1px 4px; }
+.ws-switch:hover { background: var(--panel); }
+.ws-switch:hover .t { text-decoration: underline; text-underline-offset: 3px; }
+.vbtn { border: 0; background: none; padding: 0 3px; }
+.vbtn.on { color: var(--blue); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.vbtn:hover { color: var(--link-hover); }

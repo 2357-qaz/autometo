@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import type { DiffLine, LogEntry, Plan, Session, Workspace } from '../types';
 import { useApp } from '../ctx';
 import { diffPlan } from '../diff';
-import { TIERS } from '../hie';
+import { EffortLabel, TierLabel } from './Hie';
 import { fmtDate, fmtDuration, fmtTokens, startOfDay } from '../util';
 import { DiffLines } from './DiffLines';
 
@@ -189,7 +189,15 @@ function SessionHead({ start, seg }: { start?: LogEntry; seg?: Session }) {
     <div className="user-msg">
       <span className="caret">&gt;</span>
       <span className="grow">{start?.title || <span className="dim">专注 Session</span>}</span>
-      <span className="faint nowrap">{seg ? `${TIERS[seg.tier].label} · ${seg.effort} · ${seg.plannedMin}m` : start?.detail}</span>
+      <span className="nowrap um-meta">
+        {seg ? (
+          <>
+            <TierLabel tier={seg.tier} /> <EffortLabel effort={seg.effort} /> <span className="faint">· {seg.plannedMin}m</span>
+          </>
+        ) : (
+          <span className="faint">{start?.detail}</span>
+        )}
+      </span>
     </div>
   );
 }

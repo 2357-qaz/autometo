@@ -4,6 +4,7 @@ import { useApp } from '../ctx';
 import { matchCommands } from '../commands';
 import { activeSession, latestFatigue, runSegmentsTokens, runStartedAt, TIERS, type BudgetLevel } from '../hie';
 import { currentWs } from '../store';
+import { EffortLabel, TierLabel } from './Hie';
 import { bar, fmtDuration, fmtTokens } from '../util';
 
 export interface PromptHandle {
@@ -33,7 +34,7 @@ function SpinnerLine() {
       <span className="glyph">{GLYPHS[tick % GLYPHS.length]}</span>
       <span>{verb}…</span>
       <span className="dim">
-        ({fmtDuration(elapsed)} / {s.plannedMin}m · ↑ {fmtTokens(runSegmentsTokens(state, s.runId))} tokens · {TIERS[s.tier].label}/{s.effort}
+        ({fmtDuration(elapsed)} / {s.plannedMin}m · ↑ {fmtTokens(runSegmentsTokens(state, s.runId))} tokens · <TierLabel tier={s.tier} /> <EffortLabel effort={s.effort} />
         <span className="hide-sm">{s.intent ? ` · ${s.intent}` : ''}</span>)
       </span>
       {over && <span className="yellow">已超过计划时长</span>}
@@ -223,23 +224,28 @@ export const Bottom = forwardRef<PromptHandle, {
         </div>
       </div>
       <div className="statusline">
-        <button className={`chip ${mode === 'plan' ? 'mode-plan' : 'mode-goal'}`} onClick={onToggleMode} title="切换 Plan / Goal 模式（Shift+Tab）">
+        <button className={`sl ${mode === 'plan' ? 'mode-plan' : 'mode-goal'}`} onClick={onToggleMode} title="切换 Plan / Goal 模式（Shift+Tab）">
           {mode === 'plan' ? '⏸ plan mode on' : '⏵⏵ goal mode on'}
         </button>
-        {advice ? <span className="yellow">{advice}</span> : <button className="chip" onClick={() => open({ type: 'help' })}>? 帮助</button>}
+        {advice ? <span className="yellow">{advice}</span> : <button className="sl faint" onClick={() => open({ type: 'help' })}>? for shortcuts</button>}
         <span className="spacer" />
-        <button className="chip" title={`模型档位：${TIERS[state.hie.tier].hint}（点击轮换 · /model）`} onClick={() => onRun('/model')}>
-          {TIERS[state.hie.tier].label}
+        <button className="sl" title={`模型档位：${TIERS[state.hie.tier].hint}（点击切换）`} onClick={() => onRun('/model')}>
+          <TierLabel tier={state.hie.tier} />
         </button>
-        <button className="chip" title="推理强度（点击轮换 · /effort）" onClick={() => onRun('/effort')}>{state.hie.effort}</button>
+        <span className="sep">·</span>
+        <button className="sl" title="推理强度（点击切换）" onClick={() => onRun('/effort')}>
+          <EffortLabel effort={state.hie.effort} />
+        </button>
+        <span className="sep">·</span>
         <span
-          className={budgetLevel === 'ok' ? '' : budgetLevel === 'warn' ? 'yellow' : 'red'}
+          className={`sl ${budgetLevel === 'ok' ? 'dim' : budgetLevel === 'warn' ? 'yellow' : 'red'}`}
           title={`今日 Cognitive Token：${used.toLocaleString()} / ${state.settings.dailyBudget.toLocaleString()}（/budget 修改）`}
         >
           <span className="meter">{bar(used / state.settings.dailyBudget, 6)}</span> {fmtTokens(used)}/{fmtTokens(state.settings.dailyBudget)}
           {budgetLevel === 'low' && ` · ${budgetLeft}% left`}
         </span>
-        <button className="chip" title="疲劳自评 1–5（/fatigue）" onClick={() => (ta.current && (setV('/fatigue '), ta.current.focus()))}>
+        <span className="sep">·</span>
+        <button className={`sl ${fat && fat >= 4 ? 'yellow' : 'dim'}`} title="疲劳自评 1–5（点击填写）" onClick={() => (ta.current && (setV('/fatigue '), ta.current.focus()))}>
           {fat ? `疲劳 ${fat}/5` : '疲劳 –'}
         </button>
         {store.saveError() && <span className="red">✗ 未保存</span>}

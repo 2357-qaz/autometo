@@ -8,6 +8,7 @@ import * as ops from '../ops';
 import { activePlan, currentWs, findWs } from '../store';
 import type { Effort, Tier, Verdict, Workspace } from '../types';
 import { fmtAgo, fmtDuration, fmtTokens } from '../util';
+import { EffortLabel, TierLabel } from './Hie';
 
 function Shell(props: { title: ReactNode; desc?: ReactNode; wide?: boolean; onSubmit?: () => void; children: ReactNode; actions?: ReactNode; submitLabel?: string; danger?: boolean; error?: string | null }) {
   const { close } = useApp();
@@ -170,7 +171,7 @@ function TierPicker({ tier, setTier, effort, setEffort }: { tier: Tier; setTier:
         <div className="seg" role="group" aria-label="模型档位">
           {TIER_ORDER.map((t) => (
             <button type="button" key={t} aria-pressed={tier === t} onClick={() => setTier(t)}>
-              {TIERS[t].label} <span className="dim">· {TIERS[t].rate}/min</span>
+              <TierLabel tier={t} /> <span className="dim">· {TIERS[t].rate}/min</span>
               <small>{TIERS[t].hint}</small>
             </button>
           ))}
@@ -181,7 +182,7 @@ function TierPicker({ tier, setTier, effort, setEffort }: { tier: Tier; setTier:
         <div className="seg" role="group" aria-label="推理强度">
           {EFFORT_ORDER.map((e) => (
             <button type="button" key={e} aria-pressed={effort === e} onClick={() => setEffort(e)}>
-              {e} <span className="dim">×{EFFORTS[e].mult}</span>
+              <EffortLabel effort={e} /> <span className="dim">×{EFFORTS[e].mult}</span>
               <small>{EFFORTS[e].hint}</small>
             </button>
           ))}
