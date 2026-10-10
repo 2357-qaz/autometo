@@ -15,6 +15,20 @@ npm run build      # 产物在 apps/web/dist/，纯静态，可直接部署
 
 数据默认保存在浏览器 localStorage（键 `automedo.v0`），可通过 `/export`、`/import` 备份与恢复。
 
+### 终端版（TUI）
+
+```bash
+npm run tui                          # 开发时直接运行（数据在 ~/.automedo）
+npm run build -w @automedo/tui       # 打包成 apps/tui/dist/cli.js
+npm install -g ./apps/tui            # 全局安装 automedo 命令
+```
+
+- `automedo`：交互界面。历史写进终端自己的滚动区，底部是当前任务 + 编号 Todo、输入框和状态行；
+  `shift+tab` 切换模式，`ctrl+o` 切换/删除 Plan 与 Goal，`ctrl+f` 专注，`ctrl+n` 完成并下一个，`ctrl+z` 撤销，`?` 帮助。
+- 子命令适合脚本和快速记录：`automedo add 买咖啡豆`、`automedo done 3`、`automedo next`、`automedo status`、`automedo diff`、`automedo log`、`automedo session 45 写文章页`、`automedo end`；也可以执行任意斜杠命令，如 `automedo defer 3 等配色`。
+- Compact 快照可以在表单里按 `e` 用 `$EDITOR` 编辑。
+- 交互界面开着时用子命令改数据，界面会自动刷新；配置了同步时，子命令执行前后都会同步。
+
 ### 多设备同步（可选）
 
 ```bash
@@ -95,5 +109,6 @@ packages/core/    业务核心（不依赖 UI 与存储，供 Web / TUI / Server
   tests/            单元测试
 packages/server/  自托管同步服务器（node:sqlite），可同时托管网页版
 apps/web/         WebUI（React + Vite），localStorage 持久化 + 同步客户端
+apps/tui/         终端版（Ink），~/.automedo 文件持久化 + 同步客户端
 docs/v1-plan.md   V1（TUI + 后端 + PWA）技术方案
 ```

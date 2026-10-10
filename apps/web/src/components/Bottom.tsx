@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { Output } from '../ctx';
 import { useApp } from '../ctx';
-import { matchCommands } from '@automedo/core';
+import { matchCommands, needsArg } from '@automedo/core';
 import { activeSession, latestFatigue, runSegmentsTokens, runStartedAt, TIERS, type BudgetLevel } from '@automedo/core';
 import { currentWs } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
@@ -98,9 +98,8 @@ export const Bottom = forwardRef<PromptHandle, {
   const complete = (i: number) => {
     const c = sugs[i];
     if (!c) return;
-    const next = `/${c.name}${c.args ? ' ' : ''}`;
-    if (!c.args) submit(`/${c.name}`);
-    else setV(next);
+    if (needsArg(c)) setV(`/${c.name} `);
+    else submit(`/${c.name}`);
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

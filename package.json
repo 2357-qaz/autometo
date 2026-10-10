@@ -14,7 +14,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm test --workspaces --if-present",
     "server": "npm start -w @automedo/server",
-    "server:dev": "npm run dev -w @automedo/server"
+    "server:dev": "npm run dev -w @automedo/server",
+    "tui": "npm start -w @automedo/tui --"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

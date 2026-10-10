@@ -147,7 +147,6 @@ export const COMMANDS: Command[] = [
       const v = a.trim() ? Number(a.trim().replace(/^v/i, '')) : undefined;
       if (v != null && !p.versions.some((x) => x.v === v)) return { text: `没有版本 v${a.trim()}。现有：${p.versions.map((x) => 'v' + x.v).join(' ')}`, error: true };
       c.showDiff(p.id, v);
-      return ok(`Plan Diff · v${v ?? p.versions[0].v} → 现在`, false);
     },
   },
   {
@@ -280,6 +279,11 @@ function firstPending(d: Parameters<typeof ops.requireWs>[0]): string {
   const i = list.findIndex((t) => t.status === 'pending');
   if (i < 0) throw new ops.UserError('没有待办任务');
   return String(i + 1);
+}
+
+/** True when the command can't run without an argument (`<…>`), so Enter should complete instead of run. */
+export function needsArg(c: Command): boolean {
+  return !!c.args && c.args.trim().startsWith('<');
 }
 
 export function matchCommands(input: string, mode: 'plan' | 'goal'): Command[] {

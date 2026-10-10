@@ -1,0 +1,32 @@
+{
+  "name": "@automedo/tui",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "AuTomeDo terminal UI (Ink).",
+  "bin": {
+    "automedo": "./dist/cli.js"
+  },
+  "scripts": {
+    "start": "tsx src/cli.tsx",
+    "build": "node build.mjs",
+    "typecheck": "tsc -p .",
+    "test": "vitest run",
+    "prepack": "node build.mjs"
+  },
+  "dependencies": {
+    "ink": "^8.0.0",
+    "react": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "esbuild": "^0.28.2",
+    "ink-testing-library": "^4.0.0",
+    "tsx": "^4.23.15",
+    "@automedo/core": "*"
+  },
+  "files": [
+    "dist"
+  ]
+}
