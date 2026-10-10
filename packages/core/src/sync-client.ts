@@ -37,6 +37,20 @@ export class SyncError extends Error {
   }
 }
 
+const normUrl = (u: string) => u.replace(/\/+$/, '');
+
+/** Authenticated no-op request: proves the URL and token without changing anything. */
+export async function checkServer(cfg: SyncConfig, fetchImpl: typeof fetch = fetch): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetchImpl(`${normUrl(cfg.url)}/v1/stats`, { headers: { authorization: `Bearer ${cfg.token}` } });
+  } catch (e) {
+    throw new SyncError(`连不上服务器：${(e as Error).message}`, 'network');
+  }
+  if (res.status === 401) throw new SyncError('访问令牌不正确', 'auth');
+  if (!res.ok) throw new SyncError(`服务器错误 ${res.status}`, 'server');
+}
+
 export async function callSync(cfg: SyncConfig, body: unknown, fetchImpl: typeof fetch = fetch): Promise<SyncResponse> {
   let res: Response;
   try {
@@ -115,20 +129,45 @@ export class SyncClient {
     this.interval = this.timer = null;
   }
 
-  /** Connect to a server: verifies the token with a first sync before saving. */
+  /**
+   * Connect (or switch) to a server as a transaction: verify it first, then run the
+   * first sync; if anything fails, config, sync meta and data are all put back.
+   */
   async connect(cfg: SyncConfig): Promise<void> {
-    const prev = this.storage.loadConfig();
-    this.storage.saveConfig(cfg);
-    // A different server means a fresh history.
-    if (!prev || prev.url !== cfg.url) this.storage.saveMeta(newSyncMeta(this.storage.loadMeta()?.clientId));
+    // Nothing of the old setup may run while we switch: stop timers, wait for an in-flight round.
+    this.stop();
+    await this.running?.catch(() => {});
+    const prevConfig = this.storage.loadConfig();
+    const prevMeta = this.storage.loadMeta();
+    const prevState = this.store.get();
+    const restoreBackground = () => {
+      if (prevConfig) this.start();
+      else this.set({ phase: 'off' });
+    };
+    // 1) Prove URL + token before touching anything.
     try {
-      await this.syncNow(true);
-      if (this.status.phase === 'error') throw new Error(this.status.error ?? '同步失败');
+      await checkServer(cfg, this.opts.fetchImpl);
     } catch (e) {
-      this.storage.saveConfig(prev);
-      this.set({ phase: prev ? 'idle' : 'off' });
+      this.set({ error: (e as Error).message });
+      restoreBackground();
       throw e;
     }
+    // 2) Switch and run the first sync; roll everything back if it fails.
+    this.storage.saveConfig(cfg);
+    const first = this.round(true);
+    this.running = first.catch(() => {}); // concurrent syncNow calls wait for it, never see the rejection
+    try {
+      await first;
+    } catch (e) {
+      this.running = null;
+      if (this.store.get() !== prevState) this.applyRemote(prevState);
+      if (prevMeta) this.storage.saveMeta(prevMeta); // written together with the restored state
+      this.storage.saveConfig(prevConfig);
+      this.set({ phase: prevConfig ? 'idle' : 'off', error: (e as Error).message });
+      restoreBackground();
+      throw e;
+    }
+    this.running = null;
     this.start();
   }
 
@@ -173,6 +212,10 @@ export class SyncClient {
     const cfg = this.storage.loadConfig();
     if (!cfg) return;
     let meta = this.storage.loadMeta() ?? newSyncMeta();
+    // Meta belongs to one server. If config and meta disagree (e.g. a crash in the middle
+    // of switching servers), start a fresh history rather than reuse another server's cursor.
+    if (meta.url && meta.url !== normUrl(cfg.url)) meta = newSyncMeta(meta.clientId);
+    meta = { ...meta, url: normUrl(cfg.url) };
     try {
       // First contact with this server: pull before pushing, so this device's
       // defaults (budget, model tier…) can't overwrite what other devices set.

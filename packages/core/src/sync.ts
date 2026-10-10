@@ -60,6 +60,8 @@ export interface SyncMeta {
   base: Record<string, string>;
   /** Last revision timestamp issued by this client (ms). */
   lastT: number;
+  /** Server this bookkeeping belongs to; a cursor/base is meaningless against any other. */
+  url?: string;
 }
 
 export function newSyncMeta(clientId = randomId()): SyncMeta {
