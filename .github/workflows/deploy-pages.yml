@@ -1,9 +1,9 @@
-name: Deploy AuTomeDo V0 to GitHub Pages
+name: Deploy AuTomeDo V1 to GitHub Pages
 
 on:
   push:
     branches:
-      - feat/v0-webui
+      - main
   workflow_dispatch:
 
 permissions:
@@ -19,7 +19,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout V0
+      - name: Checkout V1
         uses: actions/checkout@v4
 
       - name: Set up Node.js
