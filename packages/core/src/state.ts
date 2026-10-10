@@ -63,9 +63,14 @@ export function normalize(raw: unknown): AppState {
 const KIND_TO_TYPE: Record<string, LogEntry['type']> = { create: 'create', revise: 'revise', note: 'note', checkpoint: 'checkpoint', compact: 'compact' };
 function migrateLog(log: unknown): LogEntry[] {
   if (!Array.isArray(log)) return [];
-  return log.map((e: Record<string, unknown>) =>
-    e.type ? (e as unknown as LogEntry) : ({ id: String(e.id), at: Number(e.at), text: String(e.text ?? ''), type: KIND_TO_TYPE[String(e.kind)] ?? 'legacy' } as LogEntry),
-  );
+  let prev = 0;
+  return log.map((e: Record<string, unknown>) => {
+    const entry = e.type ? ({ ...e } as unknown as LogEntry) : ({ id: String(e.id), at: Number(e.at), text: String(e.text ?? ''), type: KIND_TO_TYPE[String(e.kind)] ?? 'legacy' } as LogEntry);
+    // Older data can have several events in the same millisecond; keep their order explicit.
+    entry.at = Math.max(entry.at, prev + 1);
+    prev = entry.at;
+    return entry;
+  });
 }
 
 // Tier names changed from lite/core/deep to haiku/sonnet/opus.

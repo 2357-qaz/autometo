@@ -12,7 +12,9 @@
     "build": "npm run build -w @automedo/web",
     "preview": "npm run preview -w @automedo/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm test --workspaces --if-present"
+    "test": "npm test --workspaces --if-present",
+    "server": "npm start -w @automedo/server",
+    "server:dev": "npm run dev -w @automedo/server"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

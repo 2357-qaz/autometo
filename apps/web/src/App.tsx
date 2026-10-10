@@ -4,7 +4,7 @@ import type { Intent as Dialog } from '@automedo/core';
 import { execute, type CmdCtx } from '@automedo/core';
 import { activeSession, budgetLevel, hieAdvice, latestFatigue, tokensToday } from '@automedo/core';
 import { ops } from '@automedo/core';
-import { currentWs, normalize, type Store } from '@automedo/core';
+import { currentWs, normalize, type Store, type SyncClient } from '@automedo/core';
 import { useStore } from './store';
 import type { AppState, Workspace } from '@automedo/core';
 import { fmtAgo, fmtDate } from '@automedo/core';
@@ -25,7 +25,7 @@ function isTyping(el: Element | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (el as HTMLElement).isContentEditable;
 }
 
-export function App({ store, loadError }: { store: Store; loadError: string | null }) {
+export function App({ store, sync, loadError }: { store: Store; sync: SyncClient; loadError: string | null }) {
   const state = useStore(store);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [output, setOutput] = useState<Output | null>(null);
@@ -107,8 +107,8 @@ export function App({ store, loadError }: { store: Store; loadError: string | nu
   );
 
   const ctx: AppCtx = useMemo(
-    () => ({ store, state, open: setDialog, close, act, say, focusPrompt, run }),
-    [store, state, close, act, say, focusPrompt, run],
+    () => ({ store, sync, state, open: setDialog, close, act, say, focusPrompt, run }),
+    [store, sync, state, close, act, say, focusPrompt, run],
   );
   // Keep selection valid when workspace changes.
   const ordered = ws ? ops.orderedTasks(ws) : [];

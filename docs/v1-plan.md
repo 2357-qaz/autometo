@@ -1,6 +1,6 @@
 # AuTomeDo V1 技术方案
 
-> 状态：草案 · 2026-10-10
+> 状态：第 1、2 阶段已完成 · 2026-10-10
 > 已确定：**单人自用** · **iOS 先做 PWA** · **终端版用 TypeScript + Ink**
 
 ## 目标
@@ -66,7 +66,7 @@ apps/tui          终端版，Ink（第 3 阶段）
 
 ## 阶段
 
-1. **共用核心**（本次）：拆出 `packages/core`，Web 改为引用它；修复 Plan/Goal 无法从界面删除的问题。
-2. **Server + 同步**：数据按记录存储、加上时钟和删除标记，实现 `/sync` 接口，Web 接入同步。
+1. ✅ **共用核心**：拆出 `packages/core`，Web 改为引用它；修复 Plan/Goal 无法从界面删除的问题。
+2. ✅ **Server + 同步**：`packages/server`（node:http + node:sqlite），`/v1/sync`、`/v1/export`，可托管网页版；同步逻辑在 `packages/core/src/sync.ts`，Web 通过 `/sync` 连接。
 3. **TUI**：用 Ink 实现完整交互，接入同步。
 4. **PWA**：manifest、Service Worker、所有编辑操作在触屏上可用、快速记录、推送。

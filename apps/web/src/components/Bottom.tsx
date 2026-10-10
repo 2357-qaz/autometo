@@ -5,6 +5,8 @@ import { matchCommands } from '@automedo/core';
 import { activeSession, latestFatigue, runSegmentsTokens, runStartedAt, TIERS, type BudgetLevel } from '@automedo/core';
 import { currentWs } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
+import { useSyncStatus } from '../sync';
+import { fmtAgo } from '@automedo/core';
 import { bar, fmtDuration, fmtTokens } from '@automedo/core';
 
 export interface PromptHandle {
@@ -248,8 +250,29 @@ export const Bottom = forwardRef<PromptHandle, {
         <button className={`sl ${fat && fat >= 4 ? 'yellow' : 'dim'}`} title="疲劳自评 1–5（点击填写）" onClick={() => (ta.current && (setV('/fatigue '), ta.current.focus()))}>
           {fat ? `疲劳 ${fat}/5` : '疲劳 –'}
         </button>
+        <span className="sep">·</span>
+        <SyncIndicator />
         {store.saveError() && <span className="red">✗ 未保存</span>}
       </div>
     </footer>
   );
 });
+
+function SyncIndicator() {
+  const { sync, open } = useApp();
+  const st = useSyncStatus(sync);
+  const label =
+    st.phase === 'off' ? <span className="faint">本地</span>
+    : st.phase === 'syncing' ? <span className="blue">⟳ 同步中</span>
+    : st.phase === 'offline' ? <span className="yellow">⚠ 离线</span>
+    : st.phase === 'error' ? <span className="red">✗ 同步失败</span>
+    : <span className="dim">✓ 已同步</span>;
+  const title =
+    st.phase === 'off' ? '数据只在这台设备上（点击连接服务器）'
+    : st.error ?? (st.lastSyncAt ? `上次同步：${fmtAgo(st.lastSyncAt)}` : '同步');
+  return (
+    <button className="sl" title={title} onClick={() => open({ type: 'sync' })}>
+      {label}
+    </button>
+  );
+}

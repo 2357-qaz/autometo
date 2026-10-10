@@ -1,0 +1,23 @@
+{
+  "name": "@automedo/server",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted AuTomeDo sync server (single user).",
+  "bin": {
+    "automedo-server": "./src/main.ts"
+  },
+  "scripts": {
+    "start": "node --no-warnings=ExperimentalWarning --import tsx src/main.ts",
+    "dev": "AUTOMEDO_INSECURE=1 node --no-warnings=ExperimentalWarning --import tsx --watch src/main.ts",
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@automedo/core": "*",
+    "tsx": "^4.23.15"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5"
+  }
+}

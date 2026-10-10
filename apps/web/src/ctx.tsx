@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react';
 import type { Intent as Dialog } from '@automedo/core';
-import type { Store } from '@automedo/core';
+import type { Store, SyncClient } from '@automedo/core';
 import type { AppState } from '@automedo/core';
 
 export interface Output {
@@ -13,6 +13,7 @@ export interface Output {
 
 export interface AppCtx {
   store: Store;
+  sync: SyncClient;
   state: AppState;
   open: (d: Dialog) => void;
   close: () => void;

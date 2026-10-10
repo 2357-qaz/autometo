@@ -9,6 +9,7 @@ import { activePlan, currentWs, findWs } from '@automedo/core';
 import type { Effort, Tier, Verdict, Workspace } from '@automedo/core';
 import { fmtAgo, fmtDuration, fmtTokens } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
+import { useSyncStatus } from '../sync';
 
 function Shell(props: { title: ReactNode; desc?: ReactNode; wide?: boolean; onSubmit?: () => void; children: ReactNode; actions?: ReactNode; submitLabel?: string; danger?: boolean; error?: string | null }) {
   const { close } = useApp();
@@ -102,6 +103,8 @@ export function DialogHost({ dialog }: { dialog: Dialog }) {
       return <Help />;
     case 'switch':
       return <Switcher />;
+    case 'sync':
+      return <SyncSetup />;
     case 'confirm':
       return <Confirm {...dialog} />;
   }
@@ -632,4 +635,72 @@ export function useConfirmDeleteWs() {
       danger: true,
       onConfirm: () => void act('删除', (d) => ops.deleteWs(d, w.id)),
     });
+}
+
+const PHASE_LABEL: Record<string, string> = { off: '未连接', idle: '已同步', syncing: '同步中…', error: '同步失败', offline: '离线（恢复网络后自动同步）' };
+
+/** Connect this device to the self-hosted server. */
+function SyncSetup() {
+  const { sync, close, say } = useApp();
+  const status = useSyncStatus(sync);
+  const cfg = sync.config();
+  const [url, setUrl] = useState(cfg?.url ?? (location.protocol.startsWith('http') && location.port !== '5173' ? location.origin : 'http://localhost:8787'));
+  const [token, setToken] = useState(cfg?.token ?? '');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const connect = async () => {
+    if (!/^https?:\/\/./.test(url.trim())) return setErr('服务器地址需要以 http:// 或 https:// 开头');
+    if (!token.trim()) return setErr('请填写访问令牌（服务器的 AUTOMEDO_TOKEN）');
+    setBusy(true);
+    setErr(null);
+    try {
+      await sync.connect({ url: url.trim().replace(/\/+$/, ''), token: token.trim() });
+      say({ cmd: '/sync', text: `已连接 ${url.trim()}，数据已同步` });
+      close();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Shell
+      title={<><span className="blue">⟳</span> 同步</>}
+      desc="连接你自托管的 AuTomeDo 服务器后，终端、网页和手机会共用同一份数据；离线时照常使用，联网后自动合并。"
+      error={err}
+      submitLabel={busy ? '连接中…' : cfg ? '保存并同步' : '连接'}
+      onSubmit={() => void connect()}
+      actions={
+        cfg ? (
+          <>
+            <button type="button" className="btn" onClick={() => void sync.syncNow()}>立即同步</button>
+            <button
+              type="button"
+              className="btn danger"
+              onClick={() => {
+                sync.disconnect();
+                say({ cmd: '/sync', text: '已断开同步。本地数据保留在这台设备上。' });
+                close();
+              }}
+            >
+              断开
+            </button>
+          </>
+        ) : null
+      }
+    >
+      {cfg && (
+        <div className="field">
+          <span>状态</span>
+          <div>
+            <span className={status.phase === 'idle' ? 'green' : status.phase === 'error' ? 'red' : status.phase === 'offline' ? 'yellow' : 'dim'}>{PHASE_LABEL[status.phase]}</span>
+            {status.lastSyncAt && <span className="dim"> · 上次 {fmtAgo(status.lastSyncAt)}</span>}
+            {status.error && <div className="red">{status.error}</div>}
+          </div>
+        </div>
+      )}
+      <label className="field"><span>服务器地址</span><input data-autofocus value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://automedo.example.com" spellCheck={false} autoCapitalize="off" /></label>
+      <label className="field"><span>访问令牌</span><input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="AUTOMEDO_TOKEN" autoComplete="off" /></label>
+    </Shell>
+  );
 }

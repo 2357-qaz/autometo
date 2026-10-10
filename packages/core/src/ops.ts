@@ -16,7 +16,9 @@ const LOG_LIMIT = 2000;
 /** Append an event to a workspace log, tagging it with the running focus session. */
 export function emit(d: AppState, ws: Workspace, ev: Omit<LogEntry, 'id' | 'at'> & { at?: number }): LogEntry {
   const s = activeSession(d);
-  const e: LogEntry = { id: uid(), at: ev.at ?? Date.now(), ...ev, runId: ev.runId ?? (s && s.wsId === ws.id ? s.runId : undefined) };
+  // Strictly increasing per workspace, so order survives sync (which sorts by time).
+  const prev = ws.log[ws.log.length - 1]?.at ?? 0;
+  const e: LogEntry = { id: uid(), ...ev, at: Math.max(ev.at ?? Date.now(), prev + 1), runId: ev.runId ?? (s && s.wsId === ws.id ? s.runId : undefined) };
   ws.log.push(e);
   if (ws.log.length > LOG_LIMIT) ws.log.splice(0, ws.log.length - LOG_LIMIT);
   ws.updatedAt = e.at;
@@ -420,7 +422,8 @@ export function setTaskStatus(d: AppState, taskId: string, status: TaskStatus, n
     if (st != null && from === 'active') {
       // Prefer focused (in-session) time; fall back to wall clock only for short same-sitting work.
       const focused = focusedMsBetween(d, st, now);
-      durMs = focused > 0 ? focused : now - st < 4 * 3_600_000 ? now - st : undefined;
+      const wall = Math.max(0, now - st);
+      durMs = focused > 0 ? focused : wall < 4 * 3_600_000 ? wall : undefined;
       tokens = tokensBetween(d, st, now) || undefined;
     }
   }

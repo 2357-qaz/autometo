@@ -10,3 +10,5 @@ export * from './commands';
 export * from './intents';
 export * from './demo';
 export * as ops from './ops';
+export * from './sync';
+export * from './sync-client';

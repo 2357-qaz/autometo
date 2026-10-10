@@ -13,7 +13,15 @@ npm test           # 核心逻辑单测（vitest）
 npm run build      # 产物在 apps/web/dist/，纯静态，可直接部署
 ```
 
-数据只保存在浏览器 localStorage（键 `automedo.v0`），可通过 `/export`、`/import` 备份与恢复。
+数据默认保存在浏览器 localStorage（键 `automedo.v0`），可通过 `/export`、`/import` 备份与恢复。
+
+### 多设备同步（可选）
+
+```bash
+AUTOMEDO_TOKEN=$(openssl rand -base64 32) AUTOMEDO_WEB_DIR=apps/web/dist npm run server   # http://127.0.0.1:8787
+```
+
+然后在网页里输入 `/sync`，填服务器地址和令牌。离线照常使用，联网后自动合并。部署、Docker、HTTPS 见 [`packages/server/README.md`](packages/server/README.md)。
 
 ## 界面
 
@@ -82,7 +90,10 @@ packages/core/    业务核心（不依赖 UI 与存储，供 Web / TUI / Server
   src/compact.ts    规则生成快照
   src/hie.ts        Human Inference Engine 计算
   src/commands.ts   斜杠命令；需要表单时发出 Intent，由各客户端呈现
+  src/sync.ts       记录级同步：拆分/重组、变更检测、合并
+  src/sync-client.ts 同步客户端（Web 与 TUI 共用）
   tests/            单元测试
-apps/web/         WebUI（React + Vite），localStorage 持久化
+packages/server/  自托管同步服务器（node:sqlite），可同时托管网页版
+apps/web/         WebUI（React + Vite），localStorage 持久化 + 同步客户端
 docs/v1-plan.md   V1（TUI + 后端 + PWA）技术方案
 ```
