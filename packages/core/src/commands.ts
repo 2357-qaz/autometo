@@ -1,5 +1,5 @@
 import type { Intent } from './intents';
-import type { Store } from './store';
+import { describeUndo, type Store } from './store';
 import { activeGoal, activePlan, currentWs } from './state';
 import { activeSession, EFFORT_ORDER, TIER_ORDER } from './hie';
 import * as ops from './ops';
@@ -273,7 +273,14 @@ export const COMMANDS: Command[] = [
       });
     },
   },
-  { name: 'undo', desc: '撤销上一步（Ctrl+Z）', run: (_, c) => { const l = c.store.undo(); return l ? ok(`已撤销：${l}`, false) : { text: '没有可撤销的操作', error: true }; } },
+  {
+    name: 'undo',
+    desc: '撤销上一步（Ctrl+Z）',
+    run: (_, c) => {
+      const r = describeUndo(c.store.undo());
+      return r.error ? { text: r.text, error: true } : ok(r.text, false);
+    },
+  },
   { name: 'sync', desc: '连接自托管服务器，在多台设备间同步', run: (_, c) => void c.open({ type: 'sync' }) },
   { name: 'export', desc: '导出 JSON 备份', run: (_, c) => { c.exportData(); return ok('已导出备份文件', false); } },
   { name: 'import', desc: '从 JSON 备份导入（会覆盖当前数据）', run: (_, c) => void c.importData() },

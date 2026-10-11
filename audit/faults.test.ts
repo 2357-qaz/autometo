@@ -92,7 +92,7 @@ it('a failed atomic metadata write leaves the previous durable pair on restart',
     const before = d.disk.text;
     d.store.mutate('edit', s => ops.updateTask(s, 't', { title: 'not durable' }));
     d.disk.fail = true;
-    expect(() => d.persistence.saveMeta({ ...newSyncMeta('A'), cursor: 42 })).toThrow(/ENOSPC/);
+    expect(() => d.persistence.updateMeta(() => ({ ...newSyncMeta('A'), cursor: 42 }))).toThrow(/ENOSPC/);
     expect(d.disk.text).toBe(before);
     const restarted = createDocPersistence({ read: () => d.disk.text, write() { throw new Error('read only recovery'); } });
     expect(restarted.load().state.plans[0].tasks[0].title).toBe('original');

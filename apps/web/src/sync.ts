@@ -19,8 +19,8 @@ const storage: SyncStorage = {
   saveConfig: (c) => (c ? localStorage.setItem(CONFIG_KEY, JSON.stringify(c)) : localStorage.removeItem(CONFIG_KEY)),
   // Meta lives inside the state document (written together with the state).
   loadMeta: () => persistence.loadMeta(),
-  saveMeta: (m) => {
-    persistence.saveMeta(m);
+  updateMeta: (fn) => {
+    persistence.updateMeta(fn);
     localStorage.removeItem(LEGACY_META_KEY);
   },
 };

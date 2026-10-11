@@ -5,7 +5,7 @@ import { App } from '../src/ui';
 import { editLine, lineFrom } from '../src/lineedit';
 
 const wait = (ms = 30) => new Promise((r) => setTimeout(r, ms));
-const noSync: SyncStorage = { loadConfig: () => null, saveConfig: () => {}, loadMeta: () => null, saveMeta: () => {} };
+const noSync: SyncStorage = { loadConfig: () => null, saveConfig: () => {}, loadMeta: () => null, updateMeta: () => {} };
 // ANSI-stripped full output (static scrollback + live area).
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
 

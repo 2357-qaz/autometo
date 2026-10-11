@@ -101,8 +101,8 @@ export const fileSyncStorage: SyncStorage = {
   loadConfig: () => readJson<SyncConfig>(file('sync.json')),
   saveConfig: (c) => (c ? writeAtomic(file('sync.json'), JSON.stringify(c, null, 2)) : rmSync(file('sync.json'), { force: true })),
   loadMeta: () => persistence().loadMeta(),
-  saveMeta: (m) => {
-    persistence().saveMeta(m);
+  updateMeta: (fn) => {
+    persistence().updateMeta(fn);
     rmSync(file('sync-meta.json'), { force: true }); // migrated into state.json
   },
 };

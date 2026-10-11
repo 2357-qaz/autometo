@@ -11,7 +11,7 @@ function disk(initial: string | null = null) {
 }
 
 describe('single-document persistence', () => {
-  it('saveMeta writes meta and the current state in one write', () => {
+  it('updateMeta writes meta and the current state in one write', () => {
     const { d, io } = disk();
     const p = createDocPersistence(io);
     p.load();
@@ -19,7 +19,7 @@ describe('single-document persistence', () => {
     p.attach(store);
     store.mutate('x', (s) => void ops.createPlan(s, '同一次写入'));
     expect(d.writes).toBe(0); // state not written yet (debounce)
-    p.saveMeta({ ...newSyncMeta('dev'), cursor: 42 });
+    p.updateMeta((m) => ({ ...m, cursor: 42 }));
     expect(d.writes).toBe(1);
     const doc = JSON.parse(d.doc!);
     expect(doc.syncMeta.cursor).toBe(42);
@@ -28,6 +28,20 @@ describe('single-document persistence', () => {
     const p2 = createDocPersistence(io);
     expect(p2.load().state.plans[0].title).toBe('同一次写入');
     expect(p2.loadMeta()?.cursor).toBe(42);
+  });
+
+  it('a local edit is recorded (revision + outbox) and saved in the same document as the data', () => {
+    const { d, io } = disk();
+    const p = createDocPersistence(io);
+    p.load();
+    const store = createStore(emptyState(), p.persist, 0);
+    p.attach(store);
+    store.mutate('x', (s) => void ops.createPlan(s, 'P'));
+    store.flush();
+    const doc = JSON.parse(d.doc!);
+    const planKey = `plan:${doc.plans[0].id}`;
+    expect(doc.syncMeta.outbox[planKey]).toBeTruthy();
+    expect(doc.syncMeta.revs[planKey]).toBe(doc.syncMeta.outbox[planKey]);
   });
 
   it('adopts meta from the legacy location, and the meta never leaks into state', () => {

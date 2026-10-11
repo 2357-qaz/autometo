@@ -78,7 +78,8 @@ export function validateSync(body: unknown): SyncRequest {
     if (c.parent !== undefined && typeof c.parent !== 'string') throw new HttpError(400, `bad parent for ${c.id}`);
     if (!c.deleted && c.data === undefined) throw new HttpError(400, `missing data for ${c.id}`);
   }
-  if (b.confirmDeletes !== undefined && (!Number.isInteger(b.confirmDeletes) || b.confirmDeletes < 0)) throw new HttpError(400, 'bad confirmDeletes');
+  if (b.confirmDeleteIds !== undefined && (!Array.isArray(b.confirmDeleteIds) || b.confirmDeleteIds.length > 100_000 || !b.confirmDeleteIds.every((x) => typeof x === 'string'))) throw new HttpError(400, 'bad confirmDeleteIds');
+  if (b.cursorTag !== undefined && (typeof b.cursorTag !== 'string' || b.cursorTag.length > 200)) throw new HttpError(400, 'bad cursorTag');
   return b as SyncRequest;
 }
 

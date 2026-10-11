@@ -36,7 +36,7 @@ export function device(id: string, initial = emptyState(T0), cfg: SyncConfig | n
   } }, () => newSyncMeta(id));
   const store = createStore(persistence.load().state, persistence.persist, 60_000);
   persistence.attach(store);
-  const storage = { loadConfig: () => config, saveConfig: (c: SyncConfig | null) => { config = c; }, loadMeta: persistence.loadMeta, saveMeta: persistence.saveMeta };
+  const storage = { loadConfig: () => config, saveConfig: (c: SyncConfig | null) => { config = c; }, loadMeta: persistence.loadMeta, updateMeta: persistence.updateMeta };
   const client = new SyncClient(store, storage, { fetchImpl, intervalMs: 60_000, debounceMs: 60_000 });
   return { store, disk, persistence, storage, client, sync: () => client.syncNow(true), close() { client.stop(); store.flush(); } };
 }

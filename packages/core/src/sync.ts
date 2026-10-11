@@ -1,11 +1,14 @@
 // Local-first sync, record level.
 //
 // The nested AppState is decomposed into flat records (plan meta, phase, task,
-// version, log entry, session, …). Each sync compares the current records with
-// the snapshot from the last successful sync, so domain operations never have to
-// track revisions themselves. Conflicts resolve last-writer-wins per record using
-// a monotonic revision; deletions travel as tombstones. Log entries, versions and
-// checkpoints are immutable, so in practice they just union across devices.
+// version, log entry, session, …). Every local edit is recorded AT EDIT TIME: the
+// records it changed get a fresh revision and go into the device's outbox. A sync
+// sends the outbox as is — so a retry re-sends the same revisions (idempotent) —
+// and applies the server's newer records. Nothing is ever inferred from what is
+// "missing" in the state: deletions are only ever explicit, recorded edits.
+// Conflicts resolve last-writer-wins per record by revision (time of the edit).
+// First contact, a server switch and a server whose history went back (restored
+// database) all go through one reconciliation that compares revisions record by record.
 import type { AppState, Checkpoint, Compact, FatigueMark, Goal, LogEntry, Phase, Plan, PlanVersion, Session, Task } from './types';
 import { emptyState } from './state';
 
@@ -44,9 +47,11 @@ export interface SyncRecord {
 export interface SyncRequest {
   clientId: string;
   cursor: number;
+  /** Opaque server identity of `cursor` (see SyncResponse.cursorTag). */
+  cursorTag?: string;
   changes: SyncRecord[];
-  /** The user confirmed a mass deletion of up to this many records (see DeleteGuard). */
-  confirmDeletes?: number;
+  /** Record ids whose deletion the user confirmed (see DeleteGuard). Only these may pass. */
+  confirmDeleteIds?: string[];
 }
 
 /**
@@ -61,27 +66,38 @@ export interface DeleteGuard {
   live: number;
   /** Plans/goals among them. */
   workspaces: { kind: 'plan' | 'goal'; title: string }[];
+  /** Exactly the records this request would delete — what a confirmation covers. */
+  ids: string[];
 }
 
 export interface SyncResponse {
   cursor: number;
+  /** Identifies this cursor position in this database's history; send it back next time. */
+  cursorTag?: string;
   records: SyncRecord[];
+  /** The server's history no longer contains our cursor (e.g. restored database): reconcile. */
+  reset?: boolean;
 }
 
-/** What a client persists between syncs. */
+/** What a device persists (together with its state) for syncing. */
 export interface SyncMeta {
   clientId: string;
-  cursor: number;
-  /** id → content hash, as of the last successful sync. */
-  base: Record<string, string>;
-  /** Last revision timestamp issued by this client (ms). */
+  /** Last revision timestamp issued or seen by this client (ms) — a hybrid clock. */
   lastT: number;
-  /** Server this bookkeeping belongs to; a cursor/base is meaningless against any other. */
+  /** id → revision of the version of each record this device holds (local edit or applied remote). */
+  revs: Record<string, string>;
+  /** id → revision of a local change the server has not acknowledged. Not in the state ⇒ a deletion. */
+  outbox: Record<string, string>;
+  /** Server this bookkeeping belongs to; a cursor is meaningless against any other. */
   url?: string;
+  cursor: number;
+  cursorTag?: string;
+  /** The full reconciliation with `url` is done; until then the next sync reconciles. */
+  synced?: boolean;
 }
 
 export function newSyncMeta(clientId = randomId()): SyncMeta {
-  return { clientId, cursor: 0, base: {}, lastT: 0 };
+  return { clientId, lastT: 0, revs: {}, outbox: {}, cursor: 0 };
 }
 
 function randomId(): string {
@@ -268,34 +284,62 @@ export function compose(records: Iterable<Rec>, ui: AppState['ui']): AppState {
 
 // ───────────────────────── client-side sync steps ─────────────────────────
 
-export interface Prepared {
-  request: SyncRequest;
-  /** Records as they were when the request was built. */
-  snapshot: Map<string, Rec>;
-  /** Hashes of the snapshot, for detecting edits made while the request was in flight. */
-  hashes: Map<string, string>;
-  lastT: number;
+const recHash = (r: Rec) => hashData(r.data) + (r.parent ?? '');
+
+/** A record changed by one local edit (or one undo): absent before ⇒ created, absent after ⇒ deleted. */
+export interface RecordChange {
+  id: string;
+  before?: Rec;
+  after?: Rec;
 }
 
-/** Diff current state against the last synced base and stamp the changes. */
-export function prepareSync(state: AppState, meta: SyncMeta, now = Date.now()): Prepared {
-  const snapshot = decompose(state);
-  const hashes = new Map<string, string>();
-  const changes: SyncRecord[] = [];
+export function diffRecords(prev: Map<string, Rec>, next: Map<string, Rec>): RecordChange[] {
+  const out: RecordChange[] = [];
+  for (const [id, r] of next) {
+    const b = prev.get(id);
+    if (!b || recHash(b) !== recHash(r)) out.push({ id, before: b, after: r });
+  }
+  for (const [id, b] of prev) if (!next.has(id)) out.push({ id, before: b });
+  return out;
+}
+
+export const sameRec = (a: Rec | undefined, b: Rec | undefined) => (a && b ? recHash(a) === recHash(b) : a === b);
+
+/** Stamp a local edit: each changed record gets a new revision now and joins the outbox. */
+export function recordLocal(meta: SyncMeta, changes: RecordChange[], now = Date.now()): SyncMeta {
+  if (!changes.length) return meta;
   let t = Math.max(now, meta.lastT);
-  const next = () => makeRev(++t, meta.clientId);
-  for (const [id, r] of snapshot) {
-    const h = hashData(r.data) + (r.parent ?? '');
-    hashes.set(id, h);
-    // Untouched defaults are "unset", not a choice: never let them overwrite another
-    // device's settings. Once synced, changing back to the default is a real change.
-    if (meta.base[id] === undefined && isUntouchedDefault(r)) continue;
-    if (meta.base[id] !== h) changes.push({ id, kind: r.kind, parent: r.parent, rev: next(), data: r.data });
+  const revs = { ...meta.revs };
+  const outbox = { ...meta.outbox };
+  for (const c of changes) {
+    const rev = makeRev(++t, meta.clientId);
+    revs[c.id] = rev;
+    outbox[c.id] = rev;
   }
-  for (const id of Object.keys(meta.base)) {
-    if (!snapshot.has(id)) changes.push({ id, kind: kindOf(id), rev: next(), deleted: true });
+  return { ...meta, revs, outbox, lastT: t };
+}
+
+export interface Prepared {
+  request: SyncRequest;
+  /** id → revision as sent, to tell acknowledged entries from ones edited again meanwhile. */
+  sent: Record<string, string>;
+}
+
+/** The outbox as a request: current content of each pending record (or a tombstone). */
+export function prepareSync(state: AppState, meta: SyncMeta, now = Date.now()): Prepared {
+  const recs = decompose(state);
+  let t = Math.max(now, meta.lastT);
+  const pending: Record<string, string> = { ...meta.outbox };
+  // Never reconciled with anyone yet: everything this device has is new to the server.
+  if (!meta.synced) {
+    for (const [id, r] of recs) if (!pending[id] && !isUntouchedDefault(r)) pending[id] = meta.revs[id] ?? makeRev(++t, meta.clientId);
   }
-  return { request: { clientId: meta.clientId, cursor: meta.cursor, changes }, snapshot, hashes, lastT: t };
+  const changes: SyncRecord[] = [];
+  for (const [id, rev] of Object.entries(pending)) {
+    const r = recs.get(id);
+    changes.push(r ? { id, kind: r.kind, parent: r.parent, rev, data: r.data } : { id, kind: kindOf(id), rev, deleted: true });
+  }
+  return { request: { clientId: meta.clientId, cursor: meta.cursor, cursorTag: meta.cursorTag, changes }, sent: pending };
 }
 
 const DEFAULTS: Partial<Record<RecordKind, string>> = (() => {
@@ -314,66 +358,130 @@ function kindOf(id: string): RecordKind {
   return map[p] ?? (id as RecordKind);
 }
 
+export interface Applied {
+  state: AppState;
+  meta: SyncMeta;
+  changed: boolean;
+}
+
+function put(merged: Map<string, Rec>, r: SyncRecord): boolean {
+  const cur = merged.get(r.id);
+  if (r.deleted) return merged.delete(r.id);
+  const rec: Rec = { id: r.id, kind: r.kind, parent: r.parent, data: r.data };
+  merged.set(r.id, rec);
+  return !cur || recHash(cur) !== recHash(rec);
+}
+
+const maxTime = (meta: SyncMeta, records: SyncRecord[]) => records.reduce((m, r) => Math.max(m, revTime(r.rev) || 0), meta.lastT);
+
 /**
- * Merge the server's answer into the *current* state. Records the user edited
- * while the request was in flight win locally and are pushed on the next sync.
+ * Merge a server response into the CURRENT state (which may have changed while the
+ * request was in flight). Sent entries still at the sent revision are acknowledged;
+ * a remote record wins unless this device holds a newer pending edit of it.
  */
-export function applySync(
-  current: AppState,
-  prepared: Prepared,
-  response: SyncResponse,
-  meta: SyncMeta,
-  opts: { pullOnly?: boolean } = {},
-): { state: AppState; meta: SyncMeta; changed: boolean } {
-  const now = decompose(current);
-  const editedSince = (id: string) => {
-    const a = now.get(id);
-    const before = prepared.hashes.get(id);
-    if (!a) return before !== undefined; // deleted locally during flight
-    return hashData(a.data) + (a.parent ?? '') !== before;
-  };
-  const merged = new Map(now);
-  const base: Record<string, string> = {};
-  if (!opts.pullOnly) {
-    // Everything we sent is now the shared truth (unless edited again meanwhile).
-    for (const [id, h] of prepared.hashes) if (!editedSince(id)) base[id] = h;
-  }
-  // Records edited or deleted while the request was in flight keep their *old* base
-  // entry, so the next round still sends them — for a deletion that is what produces
-  // the tombstone (a record missing from both snapshot and base would be forgotten).
-  for (const id of new Set([...prepared.hashes.keys(), ...Object.keys(meta.base)])) {
-    if (!(id in base) && editedSince(id) && (meta.base[id] !== undefined || (!opts.pullOnly && prepared.hashes.has(id)))) {
-      base[id] = meta.base[id] ?? `inflight:${prepared.hashes.get(id)}`;
-    }
-  }
+export function applyResponse(current: AppState, meta: SyncMeta, sent: Record<string, string>, response: SyncResponse): Applied {
+  const revs = { ...meta.revs };
+  const outbox = { ...meta.outbox };
+  for (const [id, rev] of Object.entries(sent)) if (outbox[id] === rev) delete outbox[id];
+  const merged = decompose(current);
   let changed = false;
   for (const r of response.records) {
-    if (editedSince(r.id)) continue;
-    // First contact: a setting this device changed itself (offline, before ever syncing)
-    // competes with the server's by *when it was changed*, not who talks first.
-    if (opts.pullOnly && !r.deleted && (r.kind === 'settings' || r.kind === 'hie')) {
-      const mine = now.get(r.id);
-      if (mine && !isUntouchedDefault(mine)) {
-        const localAt = (mine.data as { updatedAt?: number }).updatedAt ?? 0;
-        const remoteAt = (r.data as { updatedAt?: number } | undefined)?.updatedAt ?? revTime(r.rev);
-        if (localAt > remoteAt) continue; // keep ours; it isn't in base, so it gets pushed next
-      }
-    }
-    if (r.deleted) {
-      if (merged.delete(r.id)) changed = true;
-      delete base[r.id];
-      continue;
-    }
-    const rec: Rec = { id: r.id, kind: r.kind, parent: r.parent, data: r.data };
-    const h = hashData(rec.data) + (rec.parent ?? '');
-    if ((merged.get(r.id) && hashData(merged.get(r.id)!.data) + (merged.get(r.id)!.parent ?? '')) !== h) changed = true;
-    merged.set(r.id, rec);
-    base[r.id] = h;
+    const mine = outbox[r.id] ?? revs[r.id];
+    if (mine && mine > r.rev) continue; // ours is newer: pending, or the server will send it back
+    changed = put(merged, r) || changed;
+    revs[r.id] = r.rev;
+    delete outbox[r.id];
   }
-  const maxRemoteT = response.records.reduce((m, r) => Math.max(m, revTime(r.rev) || 0), 0);
   return {
     state: changed ? compose(merged.values(), current.ui) : current,
-    meta: { ...meta, cursor: response.cursor, base, lastT: Math.max(prepared.lastT, maxRemoteT) },
+    meta: { ...meta, revs, outbox, cursor: response.cursor, cursorTag: response.cursorTag, lastT: maxTime(meta, response.records), synced: true },
     changed,
   };
+}
+
+/**
+ * Full reconciliation against everything a server holds (first contact, another
+ * server, or a server whose history went back). Per record the newer revision wins;
+ * what only this device has is queued for upload. A record this device never edited
+ * itself (no revision: older data, untouched defaults) yields to the server — except
+ * settings changed before revisions existed, which compete by their own edit time.
+ */
+export function reconcile(current: AppState, meta: SyncMeta, server: SyncResponse, now = Date.now()): Applied {
+  const revs = { ...meta.revs };
+  const outbox = { ...meta.outbox };
+  const merged = decompose(current);
+  const local = new Map(merged);
+  let t = Math.max(now, meta.lastT);
+  const fresh = () => makeRev(++t, meta.clientId);
+  const onServer = new Set<string>();
+  let changed = false;
+  for (const r of server.records) {
+    onServer.add(r.id);
+    const mine = outbox[r.id] ?? revs[r.id];
+    if (mine && mine > r.rev) {
+      outbox[r.id] = mine; // ours is newer: (re)send it
+      continue;
+    }
+    if (mine === r.rev) {
+      delete outbox[r.id]; // the server already has exactly our version
+      continue;
+    }
+    const l = local.get(r.id);
+    if (!mine && !r.deleted && l && (r.kind === 'settings' || r.kind === 'hie') && !isUntouchedDefault(l)) {
+      const localAt = (l.data as { updatedAt?: number }).updatedAt ?? 0;
+      const remoteAt = (r.data as { updatedAt?: number } | undefined)?.updatedAt ?? revTime(r.rev);
+      if (localAt > remoteAt) {
+        outbox[r.id] = revs[r.id] = fresh();
+        continue;
+      }
+    }
+    changed = put(merged, r) || changed;
+    revs[r.id] = r.rev;
+    delete outbox[r.id];
+  }
+  for (const [id, r] of local) {
+    if (onServer.has(id) || outbox[id] || isUntouchedDefault(r)) continue;
+    outbox[id] = revs[id] ??= fresh(); // only here: upload it
+  }
+  // A pending deletion of something the server never had: nothing to tell it.
+  for (const id of Object.keys(outbox)) if (!onServer.has(id) && !merged.has(id)) delete outbox[id];
+  return {
+    state: changed ? compose(merged.values(), current.ui) : current,
+    meta: { ...meta, revs, outbox, cursor: server.cursor, cursorTag: server.cursorTag, lastT: Math.max(t, maxTime(meta, server.records)) },
+    changed,
+  };
+}
+
+/**
+ * Bring a stored meta to the current format. Older versions kept a `base` of content
+ * hashes instead of revisions: whatever differed from it was an unsent local change,
+ * so it becomes the outbox (once, from a state/meta pair that was written atomically).
+ */
+export function migrateMeta(raw: unknown, state: AppState, now = Date.now()): SyncMeta | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const m = raw as Partial<SyncMeta> & { base?: Record<string, string> };
+  if (typeof m.clientId !== 'string') return null;
+  const meta: SyncMeta = {
+    clientId: m.clientId,
+    lastT: Number(m.lastT) || 0,
+    revs: m.revs ?? {},
+    outbox: m.outbox ?? {},
+    url: m.url,
+    cursor: Number(m.cursor) || 0,
+    cursorTag: m.cursorTag,
+    synced: m.synced,
+  };
+  if (m.base && !m.revs) {
+    const base = m.base;
+    const recs = decompose(state);
+    let t = Math.max(now, meta.lastT);
+    for (const [id, r] of recs) {
+      if (base[id] === undefined && isUntouchedDefault(r)) continue;
+      if (base[id] !== recHash(r)) meta.outbox[id] = meta.revs[id] = makeRev(++t, meta.clientId);
+    }
+    for (const id of Object.keys(base)) if (!recs.has(id)) meta.outbox[id] = meta.revs[id] = makeRev(++t, meta.clientId);
+    meta.lastT = t;
+    meta.synced = meta.cursor > 0 || Object.keys(base).length > 0;
+  }
+  return meta;
 }

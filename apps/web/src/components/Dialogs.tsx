@@ -784,10 +784,14 @@ function DeleteGuardSection() {
       <span>待确认</span>
       <div>
         <span className="yellow">{describeGuard(guard)}。</span>
-        <span className="dim">如果不是你删的，选「从服务器恢复」：被删的内容会回来，同一条记录以服务器版本为准。</span>
+        <span className="dim">如果不是你删的，选「从服务器恢复」：这些内容会从服务器找回，其他修改照常同步。</span>
         <div className="row-btns" style={{ marginTop: 6 }}>
           <button type="button" className="btn primary" disabled={busy} onClick={() => void run(() => sync.restoreFromServer(), '已从服务器恢复，同步继续')}>从服务器恢复</button>
-          <button type="button" className="btn danger" disabled={busy} onClick={() => void run(() => sync.confirmDeletes(), `已确认，服务器上删除了 ${guard.deletes} 条记录`)}>确认删除</button>
+          <button type="button" className="btn danger" disabled={busy} onClick={() =>
+              void run(async () => {
+                if (!(await sync.confirmDeletes())) throw new Error('要删除的内容和刚才显示的不一样了，请看一眼新的列表再确认');
+              }, `已确认，服务器上删除了 ${guard.deletes} 条记录`)
+            }>确认删除</button>
         </div>
         {err && <div className="red">{err}</div>}
       </div>

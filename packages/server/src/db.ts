@@ -37,7 +37,18 @@ export function openDb(path: string): RecordDb {
       client  TEXT
     );
     CREATE INDEX IF NOT EXISTS records_seq ON records(seq);
+    -- One row per accepted change: lets a client's cursor be checked against this
+    -- database's actual history (a restored or replaced database fails the check).
+    CREATE TABLE IF NOT EXISTS journal (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, rev TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+    INSERT OR IGNORE INTO journal (seq, id, rev) SELECT seq, id, rev FROM records;
   `);
+  // Identity of this database (a new, empty one gets a new epoch).
+  const epochRow = db.prepare("SELECT v FROM meta WHERE k = 'epoch'").get() as { v: string } | undefined;
+  const epoch = epochRow?.v ?? Math.random().toString(36).slice(2, 12);
+  if (!epochRow) db.prepare("INSERT INTO meta (k, v) VALUES ('epoch', ?)").run(epoch);
+  const journalAt = db.prepare('SELECT rev FROM journal WHERE seq = ?');
+  const journal = db.prepare('INSERT OR REPLACE INTO journal (seq, id, rev) VALUES (?, ?, ?)');
   const get = db.prepare('SELECT * FROM records WHERE id = ?');
   const upsert = db.prepare(`
     INSERT INTO records (id, kind, parent, rev, seq, deleted, data, client) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -52,6 +63,13 @@ export function openDb(path: string): RecordDb {
   const liveWorkspaces = db.prepare("SELECT COUNT(*) AS n FROM records WHERE deleted = 0 AND kind IN ('plan', 'goal')");
 
   type Row = { id: string; kind: SyncRecord['kind']; parent: string | null; rev: string; seq: number; deleted: number; data: string | null };
+  /** `epoch.seq.rev` — names a position in this database's history, not just a number. */
+  const tagFor = (seq: number) => `${epoch}.${seq}.${seq ? ((journalAt.get(seq) as { rev: string } | undefined)?.rev ?? '') : ''}`;
+  /** Is the client's cursor still a point of our history? (False after a restore/replace.) */
+  const validCursor = (cursor: number, tag: string | undefined, head: number) => {
+    if (!tag) return cursor <= head; // older clients: at least catch a cursor beyond our history
+    return tag === tagFor(cursor) && cursor <= head;
+  };
   const toRecord = (r: Row): SyncRecord => ({
     id: r.id,
     kind: r.kind,
@@ -68,12 +86,14 @@ export function openDb(path: string): RecordDb {
   function guardDeletes(req: SyncRequest) {
     let deletes = 0;
     let contentDeletes = 0;
+    const ids: string[] = [];
     const workspaces: DeleteGuard['workspaces'] = [];
     for (const c of req.changes) {
       if (!c.deleted) continue;
       const cur = get.get(c.id) as Row | undefined;
       if (!cur || cur.deleted || cur.rev >= c.rev) continue;
       deletes += 1;
+      ids.push(c.id);
       if (cur.kind !== 'log') contentDeletes += 1;
       if (cur.kind === 'plan' || cur.kind === 'goal') {
         let title = '';
@@ -85,11 +105,13 @@ export function openDb(path: string): RecordDb {
         workspaces.push({ kind: cur.kind, title });
       }
     }
-    if (deletes === 0 || (req.confirmDeletes ?? 0) >= deletes) return;
+    // A confirmation covers exactly the records the user was shown, not "up to N".
+    const confirmed = new Set(req.confirmDeleteIds ?? []);
+    if (deletes === 0 || ids.every((id) => confirmed.has(id))) return;
     const live = (liveContent.get() as { n: number }).n;
     const lastWorkspace = workspaces.length > 0 && workspaces.length >= (liveWorkspaces.get() as { n: number }).n;
     if (workspaces.length >= 2 || lastWorkspace || (contentDeletes >= MASS_DELETE_MIN && contentDeletes * 2 > live)) {
-      throw new MassDeleteError({ error: 'confirm-delete', deletes, live, workspaces });
+      throw new MassDeleteError({ error: 'confirm-delete', deletes, live, workspaces, ids });
     }
   }
 
@@ -98,8 +120,14 @@ export function openDb(path: string): RecordDb {
     sync(req) {
       db.exec('BEGIN IMMEDIATE');
       try {
-        guardDeletes(req);
         let seq = (maxSeq.get() as { m: number }).m;
+        // The client's position is not part of this database's history: nothing is
+        // applied; the client must reconcile from scratch (and re-send what it has).
+        if (!validCursor(req.cursor, req.cursorTag, seq)) {
+          db.exec('ROLLBACK');
+          return { cursor: 0, cursorTag: tagFor(0), records: [], reset: true };
+        }
+        guardDeletes(req);
         const accepted = new Set<string>();
         const rejected: string[] = [];
         for (const c of req.changes) {
@@ -111,6 +139,7 @@ export function openDb(path: string): RecordDb {
           }
           seq += 1;
           upsert.run(c.id, c.kind, c.parent ?? null, c.rev, seq, c.deleted ? 1 : 0, c.deleted ? null : JSON.stringify(c.data ?? null), req.clientId);
+          journal.run(seq, c.id, c.rev);
           accepted.add(c.id);
         }
         // Everything newer than the client's cursor, minus what it just sent us…
@@ -122,8 +151,9 @@ export function openDb(path: string): RecordDb {
           const r = get.get(id) as Row | undefined;
           if (r) out.push(toRecord(r));
         }
+        const cursorTag = tagFor(seq);
         db.exec('COMMIT');
-        return { cursor: seq, records: out };
+        return { cursor: seq, cursorTag, records: out };
       } catch (e) {
         db.exec('ROLLBACK');
         throw e;

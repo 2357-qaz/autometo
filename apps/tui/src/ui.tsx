@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   activeSession,
+  describeUndo,
   budgetLevel,
   pickSpec,
   type PickKind,
@@ -641,8 +642,8 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
       if (key.ctrl && input === 'f') return run(activeSession(store.get()) ? '/end' : '/session', false);
       if (key.ctrl && input === 'n') return run('/next');
       if (key.ctrl && input === 'z') {
-        const l = store.undo();
-        return print([[{ t: '  ⎿  ', c: C.faint }, { t: l ? `已撤销：${l}` : '没有可撤销的操作', c: l ? C.dim : C.red }]]);
+        const r = describeUndo(store.undo());
+        return print([[{ t: '  ⎿  ', c: C.faint }, { t: r.text, c: r.error ? C.red : C.dim }]]);
       }
       if (key.ctrl && input === 'l') {
         stdout.write('\x1b[2J\x1b[3J\x1b[H');

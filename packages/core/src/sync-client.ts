@@ -1,7 +1,7 @@
 // Sync client shared by web and TUI: talks to the AuTomeDo server over HTTP.
 import type { Store } from './store';
 import type { AppState } from './types';
-import { applySync, newSyncMeta, prepareSync, type DeleteGuard, type SyncMeta, type SyncResponse } from './sync';
+import { applyResponse, newSyncMeta, prepareSync, reconcile, type DeleteGuard, type SyncMeta, type SyncRecord, type SyncRequest, type SyncResponse } from './sync';
 
 export interface SyncConfig {
   url: string; // e.g. https://automedo.example.com
@@ -14,11 +14,11 @@ export interface SyncStorage {
   saveConfig(c: SyncConfig | null): void;
   loadMeta(): SyncMeta | null;
   /**
-   * Must durably store `m` TOGETHER with the store's current state in one atomic
-   * write (see createDocPersistence) — otherwise a crash can leave a new cursor
-   * next to old data, and the stale data would be pushed as if it were new.
+   * Change the meta and durably store it TOGETHER with the store's current state in
+   * one atomic write (see createDocPersistence). It must also be the meta that the
+   * store's local edits are recorded into, so an update never drops one of them.
    */
-  saveMeta(m: SyncMeta): void;
+  updateMeta(fn: (m: SyncMeta) => SyncMeta): void;
 }
 
 export type SyncPhase = 'off' | 'idle' | 'syncing' | 'error' | 'offline';
@@ -27,7 +27,7 @@ export interface SyncStatus {
   phase: SyncPhase;
   lastSyncAt: number | null;
   error: string | null;
-  /** Local changes not yet acknowledged by the server (as of the last attempt). */
+  /** Local changes the server has not acknowledged yet. */
   pending: number;
   /** Sync is paused: the server wants confirmation before this mass deletion. */
   confirm: DeleteGuard | null;
@@ -64,7 +64,7 @@ export async function checkServer(cfg: SyncConfig, fetchImpl: typeof fetch = fet
   if (!res.ok) throw new SyncError(`服务器错误 ${res.status}`, 'server');
 }
 
-export async function callSync(cfg: SyncConfig, body: unknown, fetchImpl: typeof fetch = fetch): Promise<SyncResponse> {
+export async function callSync(cfg: SyncConfig, body: SyncRequest, fetchImpl: typeof fetch = fetch): Promise<SyncResponse> {
   let res: Response;
   try {
     res = await fetchImpl(`${cfg.url.replace(/\/+$/, '')}/v1/sync`, {
@@ -92,23 +92,26 @@ export interface SyncClientOptions {
   /** Background pull interval. */
   intervalMs?: number;
   fetchImpl?: typeof fetch;
-  /** Replace store contents with merged state (no undo entry). */
+  /** Install merged state (no undo entry, not a local edit). */
   applyState?: (store: Store, next: AppState) => void;
 }
 
+const outboxSize = (m: SyncMeta | null) => (m ? Object.keys(m.outbox).length : 0);
+
 export class SyncClient {
   private status: SyncStatus = { phase: 'off', lastSyncAt: null, error: null, pending: 0, confirm: null };
-  /** Set while running a round the user confirmed: deletions the server may accept. */
-  private allowDeletes: number | undefined;
+  /** Set while running a round the user confirmed: exactly the deletions they were shown. */
+  private allowDeleteIds: string[] | undefined;
   private listeners = new Set<() => void>();
   private running: Promise<void> | null = null;
   private again = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
   private unsub: (() => void) | null = null;
-  private applying = false;
 
-  constructor(private store: Store, private storage: SyncStorage, private opts: SyncClientOptions = {}) {}
+  constructor(private store: Store, private storage: SyncStorage, private opts: SyncClientOptions = {}) {
+    this.status.pending = outboxSize(storage.loadMeta());
+  }
 
   getStatus(): SyncStatus {
     return this.status;
@@ -133,8 +136,10 @@ export class SyncClient {
     this.stop();
     if (!this.storage.loadConfig()) return this.set({ phase: 'off' });
     this.set({ phase: 'idle' });
-    this.unsub = this.store.subscribe(() => {
-      if (!this.applying) this.schedule();
+    // Only real local edits trigger a push; merged remote data does not.
+    this.unsub = this.store.onLocalChange(() => {
+      this.set({ pending: outboxSize(this.storage.loadMeta()) });
+      this.schedule();
     });
     this.interval = setInterval(() => void this.syncNow(), this.opts.intervalMs ?? 30_000);
     void this.syncNow();
@@ -149,81 +154,39 @@ export class SyncClient {
   }
 
   /**
-   * Connect (or switch) to a server as a transaction: verify it first, then run the
-   * first sync; if anything fails, config, sync meta and data are all put back.
+   * Connect (or switch) to a server. Nothing local changes unless it succeeds: the
+   * server's data is reconciled on the side and merged into the current state (edits
+   * made meanwhile included) only once the whole exchange went through.
    */
   async connect(cfg: SyncConfig): Promise<void> {
     // Nothing of the old setup may run while we switch: stop timers, wait for an in-flight round.
     this.stop();
     await this.running?.catch(() => {});
-    const prevConfig = this.storage.loadConfig();
-    const prevMeta = this.storage.loadMeta();
-    const prevState = this.store.get();
-    const restoreBackground = () => {
-      if (prevConfig) this.start();
+    const hadConfig = !!this.storage.loadConfig();
+    const fail = (e: unknown) => {
+      this.set({ error: (e as Error).message, confirm: (e as SyncError).guard ?? null });
+      if (hadConfig) this.start();
       else this.set({ phase: 'off' });
-    };
-    // 1) Prove URL + token before touching anything.
-    try {
-      await checkServer(cfg, this.opts.fetchImpl);
-    } catch (e) {
-      this.set({ error: (e as Error).message });
-      restoreBackground();
       throw e;
-    }
-    // 2) Switch and run the first sync; roll everything back if it fails.
-    this.storage.saveConfig(cfg);
-    const first = this.round(true);
-    this.running = first.catch(() => {}); // concurrent syncNow calls wait for it, never see the rejection
+    };
     try {
+      await checkServer(cfg, this.opts.fetchImpl); // prove URL + token before anything else
+      const first = this.fullSync(cfg);
+      this.running = first.catch(() => {}); // concurrent syncNow calls wait for it
       await first;
     } catch (e) {
       this.running = null;
-      if (this.store.get() !== prevState) this.applyRemote(prevState);
-      // Always write the meta back (atomically with the restored state). With no previous meta,
-      // a fresh one: keeping the pulled cursor/base next to restored-away data would make the
-      // next sync read every pulled record as a local deletion and push tombstones for them.
-      const cur = this.storage.loadMeta();
-      this.storage.saveMeta(prevMeta ?? { ...newSyncMeta(cur?.clientId), lastT: cur?.lastT ?? 0 });
-      this.storage.saveConfig(prevConfig);
-      this.set({ phase: prevConfig ? 'idle' : 'off', error: (e as Error).message, confirm: null });
-      restoreBackground();
-      throw e;
+      return fail(e);
     }
     this.running = null;
+    this.storage.saveConfig(cfg);
     this.start();
   }
 
   disconnect() {
     this.stop();
     this.storage.saveConfig(null);
-    this.set({ phase: 'off', error: null, pending: 0, confirm: null });
-  }
-
-  /** The user agrees to the deletions the server paused on: send them through once. */
-  async confirmDeletes(): Promise<void> {
-    const g = this.status.confirm;
-    if (!g) return;
-    await this.running?.catch(() => {});
-    this.allowDeletes = g.deletes;
-    try {
-      await this.syncNow(true);
-    } finally {
-      this.allowDeletes = undefined;
-    }
-  }
-
-  /**
-   * The user does NOT want those deletions: forget what this device thinks it has
-   * synced and pull everything again (first contact), so records missing here come
-   * back from the server. Server versions win over local edits of the same records.
-   */
-  async restoreFromServer(): Promise<void> {
-    await this.running?.catch(() => {});
-    const cur = this.storage.loadMeta();
-    this.storage.saveMeta({ ...newSyncMeta(cur?.clientId), lastT: cur?.lastT ?? 0 });
-    this.set({ confirm: null });
-    await this.syncNow(true);
+    this.set({ phase: 'off', error: null, confirm: null });
   }
 
   schedule() {
@@ -252,63 +215,115 @@ export class SyncClient {
     return this.running;
   }
 
-  private applyRemote(next: AppState) {
-    this.applying = true;
+  /**
+   * The user agrees to the deletions the server paused on: send them through, but only
+   * those exact records. Resolves false if the pending deletions are no longer the ones
+   * shown (the server asks again, and `confirm` shows the new set).
+   */
+  async confirmDeletes(): Promise<boolean> {
+    const g = this.status.confirm;
+    if (!g) return true;
+    await this.running?.catch(() => {});
+    this.allowDeleteIds = g.ids;
     try {
-      (this.opts.applyState ?? defaultApply)(this.store, next);
+      await this.syncNow(true);
+      return true;
+    } catch (e) {
+      if ((e as SyncError).kind === 'confirm') return false;
+      throw e;
     } finally {
-      this.applying = false;
+      this.allowDeleteIds = undefined;
     }
+  }
+
+  /**
+   * The user does NOT want those deletions: drop them from the outbox, forget this
+   * device's deletion of them and reconcile with the server, which brings them back.
+   * Other pending edits are kept and still sent.
+   */
+  async restoreFromServer(): Promise<void> {
+    await this.running?.catch(() => {});
+    const ids = this.status.confirm?.ids ?? [];
+    this.storage.updateMeta((m) => {
+      const outbox = { ...m.outbox };
+      const revs = { ...m.revs };
+      for (const id of ids) {
+        delete outbox[id];
+        delete revs[id];
+      }
+      return { ...m, outbox, revs, synced: false };
+    });
+    this.set({ confirm: null });
+    await this.syncNow(true);
+  }
+
+  private applyRemote(next: AppState) {
+    (this.opts.applyState ?? ((st, n) => st.applyExternal(n)))(this.store, next);
+  }
+
+  private metaFor(cfg: SyncConfig): SyncMeta {
+    const m = this.storage.loadMeta() ?? newSyncMeta();
+    // Meta belongs to one server: for another one, start that server's history afresh
+    // (revisions and pending edits are this device's own and stay).
+    return m.url === normUrl(cfg.url) ? m : { ...m, url: normUrl(cfg.url), cursor: 0, cursorTag: undefined, synced: false };
+  }
+
+  private request(base: SyncRequest): SyncRequest {
+    return this.allowDeleteIds ? { ...base, confirmDeleteIds: this.allowDeleteIds } : base;
+  }
+
+  /** Commit a merged result: install the state first, then write meta + state together. */
+  private commit(out: { state: AppState; meta: SyncMeta; changed: boolean }) {
+    if (out.changed) this.applyRemote(out.state);
+    this.storage.updateMeta(() => out.meta);
+    const pending = outboxSize(out.meta);
+    this.set({ phase: 'idle', lastSyncAt: Date.now(), error: null, pending, confirm: null });
+    if (pending) this.schedule(); // edits made while we were talking to the server
+  }
+
+  /** Reconcile everything with the server (first contact, another server, history reset). */
+  private async fullSync(cfg: SyncConfig): Promise<void> {
+    this.set({ phase: 'syncing' });
+    const meta0 = this.metaFor(cfg);
+    const res0 = await callSync(cfg, { clientId: meta0.clientId, cursor: 0, changes: [] }, this.opts.fetchImpl);
+    // Work on a snapshot: the store is not touched until the whole exchange succeeded.
+    const plan = reconcile(this.store.get(), meta0, res0);
+    const prepared = prepareSync(plan.state, { ...plan.meta, synced: true });
+    const view = new Map<string, SyncRecord>(res0.records.map((r) => [r.id, r]));
+    let res = res0;
+    if (prepared.request.changes.length) {
+      this.set({ pending: prepared.request.changes.length });
+      res = await callSync(cfg, this.request(prepared.request), this.opts.fetchImpl);
+      if (res.reset) throw new SyncError('服务器数据在同步过程中发生了变化，请重试', 'server');
+      for (const c of prepared.request.changes) view.set(c.id, c); // accepted…
+      for (const r of res.records) view.set(r.id, r); // …unless the server answered with a newer one
+    }
+    // Merge into the CURRENT state: edits made meanwhile are newer than what the server
+    // has and simply stay pending.
+    const out = reconcile(this.store.get(), this.metaFor(cfg), { cursor: res.cursor, cursorTag: res.cursorTag, records: [...view.values()] });
+    this.commit({ ...out, meta: { ...out.meta, synced: true } });
+  }
+
+  private async normalRound(cfg: SyncConfig): Promise<void> {
+    const meta = this.metaFor(cfg);
+    const prepared = prepareSync(this.store.get(), meta);
+    this.set({ phase: 'syncing', pending: prepared.request.changes.length });
+    const res = await callSync(cfg, this.request(prepared.request), this.opts.fetchImpl);
+    // The server no longer knows our position (e.g. its database was restored).
+    if (res.reset) return this.fullSync(cfg);
+    this.commit(applyResponse(this.store.get(), this.metaFor(cfg), prepared.sent, res));
   }
 
   private async round(throwOnError: boolean) {
     const cfg = this.storage.loadConfig();
     if (!cfg) return;
-    let meta = this.storage.loadMeta() ?? newSyncMeta();
-    // Meta belongs to one server. If config and meta disagree (e.g. a crash in the middle
-    // of switching servers), start a fresh history rather than reuse another server's cursor.
-    if (meta.url && meta.url !== normUrl(cfg.url)) meta = newSyncMeta(meta.clientId);
-    meta = { ...meta, url: normUrl(cfg.url) };
     try {
-      // First contact with this server: pull before pushing, so this device's
-      // defaults (budget, model tier…) can't overwrite what other devices set.
-      if (meta.cursor === 0 && Object.keys(meta.base).length === 0) {
-        this.set({ phase: 'syncing' });
-        const probe = prepareSync(this.store.get(), meta);
-        const pull = { ...probe, request: { ...probe.request, changes: [] } };
-        const res0 = await callSync(cfg, pull.request, this.opts.fetchImpl);
-        const out0 = applySync(this.store.get(), pull, res0, meta, { pullOnly: true });
-        meta = out0.meta;
-        // Apply first, then save meta: saveMeta writes meta + current state together.
-        if (out0.changed) this.applyRemote(out0.state);
-        this.storage.saveMeta(meta);
-      }
+      const meta = this.metaFor(cfg);
+      await (meta.synced ? this.normalRound(cfg) : this.fullSync(cfg));
     } catch (e) {
       const err = e as SyncError;
-      this.set({ phase: err.kind === 'network' ? 'offline' : 'error', error: err.message });
-      if (throwOnError) throw e;
-      return;
-    }
-    const prepared = prepareSync(this.store.get(), meta);
-    this.set({ phase: 'syncing', pending: prepared.request.changes.length });
-    try {
-      const req = this.allowDeletes ? { ...prepared.request, confirmDeletes: this.allowDeletes } : prepared.request;
-      const res = await callSync(cfg, req, this.opts.fetchImpl);
-      const out = applySync(this.store.get(), prepared, res, meta);
-      // Apply first, then save meta: saveMeta writes meta + current state together.
-      if (out.changed) this.applyRemote(out.state);
-      this.storage.saveMeta(out.meta);
-      this.set({ phase: 'idle', lastSyncAt: Date.now(), error: null, pending: 0, confirm: null });
-    } catch (e) {
-      const err = e as SyncError;
-      this.set({ phase: err.kind === 'network' ? 'offline' : 'error', error: err.message, confirm: err.guard ?? null });
+      this.set({ phase: err.kind === 'network' ? 'offline' : 'error', error: err.message, confirm: err.guard ?? null, pending: outboxSize(this.storage.loadMeta()) });
       if (throwOnError) throw e;
     }
   }
-}
-
-function defaultApply(store: Store, next: AppState) {
-  store.mutate(null, (d) => {
-    Object.assign(d, next);
-  });
 }

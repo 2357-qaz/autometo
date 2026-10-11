@@ -34,7 +34,7 @@ export const undoRemote: Scenario = async () => {
     await a.sync(); await b.sync();
     b.store.mutate('remote addition', d => ops.addTask(d, 'remote task'));
     await b.sync(); await a.sync(); assert.ok(titles(a).includes('remote task'));
-    assert.equal(a.store.undo(), 'rename locally');
+    assert.equal(a.store.undo()?.label, 'rename locally'); // undo() returns { label, undone, skipped } since the fix
     await a.sync(); await b.sync();
     return { id: 'R02', actual: titles(b).includes('remote task'), expected: true, detail: { serverTitles: titles(b), guard: a.client.getStatus().confirm } };
   } finally { a.close(); b.close(); await srv.close(); }

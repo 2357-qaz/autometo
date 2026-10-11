@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { createStore, emptyState, type DeleteGuard, type SyncClient } from '@automedo/core';
 import { formFor } from '../src/forms';
 
-const guard: DeleteGuard = { error: 'confirm-delete', deletes: 42, live: 50, workspaces: [{ kind: 'plan', title: '甲' }, { kind: 'goal', title: '乙' }] };
+const guard: DeleteGuard = { error: 'confirm-delete', deletes: 42, live: 50, workspaces: [{ kind: 'plan', title: '甲' }, { kind: 'goal', title: '乙' }], ids: ['plan:a', 'goal:b'] };
 function fakeSync(confirm: DeleteGuard | null) {
   return {
     config: () => ({ url: 'http://x', token: 't' }),
     getStatus: () => ({ phase: 'error', lastSyncAt: null, error: null, pending: 0, confirm }),
-    confirmDeletes: vi.fn(async () => {}),
+    confirmDeletes: vi.fn(async () => true),
     restoreFromServer: vi.fn(async () => {}),
   };
 }

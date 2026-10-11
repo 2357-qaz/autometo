@@ -250,7 +250,7 @@ export function formFor(intent: Intent, store: Store, sync: SyncClient): FormSpe
               key: 'act',
               label: '怎么处理',
               options: [
-                { value: 'restore', label: '从服务器恢复', hint: '找回被删的内容；同一条记录以服务器版本为准' },
+                { value: 'restore', label: '从服务器恢复', hint: '从服务器找回被删的内容，其他修改照常同步' },
                 { value: 'confirm', label: '确认删除', hint: `从服务器上删除这 ${guard.deletes} 条记录` },
                 { value: 'later', label: '稍后再说', hint: '保持暂停，数据都还在' },
               ],
@@ -260,7 +260,7 @@ export function formFor(intent: Intent, store: Store, sync: SyncClient): FormSpe
           submit: async (v) => {
             try {
               if (v.act === 'confirm') {
-                await sync.confirmDeletes();
+                if (!(await sync.confirmDeletes())) return { error: '要删除的内容和刚才显示的不一样了：esc 关闭后再 /sync 看新的列表' };
                 return { text: `已确认，服务器上删除了 ${guard.deletes} 条记录` };
               }
               if (v.act === 'restore') {

@@ -30,7 +30,7 @@ if (kind === 'file') {
   const store = createStore(loaded.state, filePersist, 60_000);
   attachStore(store);
   store.mutate('edit', d => { d.plans[0].tasks[0].title = 'committed'; });
-  fileSyncStorage.saveMeta({ ...newSyncMeta('crash'), cursor: 42 });
+  fileSyncStorage.updateMeta(() => ({ ...newSyncMeta('crash'), cursor: 42 }));
 } else {
   const db = openDb(join(home, 'db.sqlite'));
   const s = fixture(); ops.updateTask(s, 't', { title: 'committed' });

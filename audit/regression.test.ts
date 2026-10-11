@@ -9,7 +9,7 @@ import { T0 } from './harness';
 // FIXED lists the scenarios whose defect has been repaired: they run as ordinary
 // regression tests. The rest stay `it.fails` (expected to fail) until fixed — a fix
 // makes them "unexpectedly pass", which fails the run until they are moved here.
-const FIXED = new Set<string>(['versionCollision', 'flushRetry', 'cliSaveFailure', 'duplicateImport', 'reviseBaseline', 'orderCollision', 'poisonedShell']);
+const FIXED = new Set<string>(['lostAcknowledgement', 'undoRemote', 'rollbackDuringConnect', 'serverRollback', 'staleConfirmation', 'inflightPending', 'versionCollision', 'flushRetry', 'cliSaveFailure', 'duplicateImport', 'reviseBaseline', 'orderCollision', 'poisonedShell']);
 const strict = process.env.AUTOMEDO_AUDIT_STRICT === '1';
 for (const run of [...scenarios, ...ioScenarios]) {
   const regression = strict || FIXED.has(run.name) ? it : it.fails;
