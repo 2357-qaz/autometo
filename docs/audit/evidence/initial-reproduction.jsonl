@@ -1,0 +1,16 @@
+{"id":"R01","actual":"A stale retry","expected":"B acknowledged","reproduced":true}
+{"id":"R02","actual":false,"expected":true,"detail":{"serverTitles":["original"],"guard":null},"reproduced":true}
+{"id":"R04","actual":["snapshot B"],"expected":["snapshot A","snapshot B"],"detail":{"commitLogs":2},"reproduced":true}
+{"id":"R05","actual":{"activeTasks":2,"activeSessions":2},"expected":{"activeTasks":1,"activeSessions":1},"reproduced":true}
+{"id":"R06","actual":false,"expected":true,"detail":{"config":null,"diskTitles":["original"]},"reproduced":true}
+{"id":"R07","actual":{"a":"acknowledged new value","b":"original","status":"idle"},"expected":{"a":"acknowledged new value","b":"acknowledged new value","status":"idle"},"reproduced":true}
+{"id":"R08","actual":"original","expected":"must persist","detail":{"writes":1,"error":"保存失败：injected ENOSPC"},"reproduced":true}
+{"id":"R09","actual":false,"expected":true,"detail":{"before":2,"afterSyncRoundTrip":1},"reproduced":true}
+{"id":"R10","actual":"changed goal","expected":"original goal","detail":[{"v":1,"goal":"changed goal"},{"v":2,"goal":"changed goal"}],"reproduced":true}
+{"id":"R11","actual":["P"],"expected":["P","q","r"],"detail":{"approvedNames":["P","q"],"newGuard":null},"reproduced":true}
+{"id":"R12","actual":["original","A appended","B appended"],"expected":["original","B appended","A appended"],"detail":{"initial":{"a":["original","A appended","B appended"],"b":["original","B appended","A appended"]},"finalA":["original","A appended","B appended"],"finalB":["original","B appended","A appended"]},"reproduced":true}
+{"id":"R13","actual":0,"expected":2,"detail":{"phase":"idle"},"reproduced":true}
+{"id":"R03T","actual":["from B","original"],"expected":["from A","from B","original"],"reproduced":true}
+{"id":"R03W","actual":["from B","original"],"expected":["from A","from B","original"],"reproduced":true}
+{"id":"R08T","actual":{"successfulExit":true,"errorReported":false},"expected":{"successfulExit":false,"errorReported":true},"detail":{"stdout":"⏺ Write(Plan)\n  ⎿  1 处新增\n       2 + ☐ not saved  phase\n  ⎿  ◇ 没有进行中的任务 · /start 开始下一个\n     ☐ original  #1\n     ☐ not saved  #2","stderr":"","persisted":false},"reproduced":true}
+{"id":"R14","actual":{"status":503,"body":"temporary outage"},"expected":{"status":200,"body":"<html>working shell</html>"},"reproduced":true}
