@@ -3,8 +3,9 @@ import { emptyState, normalize } from '../src/state';
 import { createStore } from '../src/store';
 import * as ops from '../src/ops';
 import { execute, type CmdCtx } from '../src/commands';
-import { budgetLevel, estimateTokens, tokensToday } from '../src/hie';
+import { budgetLevel, estimateTokens, fatigueMult, runSegmentsTokens, tokensToday } from '../src/hie';
 import { generateCompact } from '../src/compact';
+import { pickSpec } from '../src/picks';
 import { seedDemo } from '../src/demo';
 import { diffPlan, diffSummary } from '../src/diff';
 
@@ -95,6 +96,27 @@ describe('goal checkpoints', () => {
 });
 
 describe('HIE', () => {
+  it('/model, /effort, /fatigue without an argument ask for a pick; with one they set it', () => {
+    const { store, open, ctx } = mkCtx();
+    execute('/model', ctx);
+    execute('/effort', ctx);
+    execute('/fatigue', ctx);
+    expect(open.mock.calls.map((c) => c[0])).toEqual([
+      { type: 'pick', what: 'tier' },
+      { type: 'pick', what: 'effort' },
+      { type: 'pick', what: 'fatigue' },
+    ]);
+    expect(store.get().hie.tier).toBe('sonnet'); // no more blind cycling
+    execute('/model opus', ctx);
+    execute('/fatigue 4', ctx);
+    expect(store.get().hie.tier).toBe('opus');
+    expect(pickSpec('tier', store.get()).current).toBe(2);
+    expect(pickSpec('fatigue', store.get()).current).toBe(3);
+    expect(pickSpec('fatigue', emptyState()).current).toBe(-1);
+    store.mutate('x', (d) => pickSpec('effort', d).apply(d, 'high'));
+    expect(store.get().hie.effort).toBe('high');
+  });
+
   it('estimates tokens by tier × effort', () => {
     expect(estimateTokens('sonnet', 'medium', 60)).toBe(48_000);
     expect(estimateTokens('opus', 'high', 60)).toBe(135_000);
@@ -112,8 +134,44 @@ describe('HIE', () => {
     expect(tokensToday(d)).toBe(8000 + 15000);
     const msg = ops.endSession(d, { fatigue: 3 });
     expect(msg).toContain('20 分钟');
-    expect(msg).toContain('23,000');
+    expect(msg).toContain('46,000'); // fatigue 3 (×2) chosen at the end prices both segments
     expect(d.fatigue.at(-1)?.level).toBe(3);
+    vi.useRealTimers();
+  });
+
+  it('prices tokens by fatigue: ×1 / ×1.25 / ×2 / ×4 / ×8', () => {
+    expect([null, 1, 2, 3, 4, 5].map(fatigueMult)).toEqual([1, 1, 1.25, 2, 4, 8]);
+    expect(estimateTokens('sonnet', 'medium', 60, 5)).toBe(48_000 * 8);
+  });
+
+  it('uses the status-bar fatigue unless one is picked at the end, and freezes ended sessions', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-09T10:00:00'));
+    const d = emptyState();
+    ops.markFatigue(d, 2);
+    const id = (ops.startSession(d, { intent: '', plannedMin: 30, tier: 'sonnet', effort: 'medium' }), d.sessions[0].runId!);
+    vi.setSystemTime(new Date('2026-10-09T10:10:00'));
+    expect(tokensToday(d)).toBe(10_000); // live: 8000 × 1.25
+    expect(runSegmentsTokens(d, id)).toBe(10_000);
+    expect(runSegmentsTokens(d, id, undefined, 5)).toBe(64_000); // preview at fatigue 5
+    ops.markFatigue(d, 4); // status bar changed mid-session: the running session follows it
+    expect(tokensToday(d)).toBe(32_000);
+    ops.endSession(d, {}); // nothing picked → status-bar fatigue (4, ×4)
+    expect(d.sessions[0].tokens).toBe(32_000);
+    ops.markFatigue(d, 1); // later reports don't re-price what already ended
+    vi.setSystemTime(new Date('2026-10-09T11:00:00'));
+    expect(tokensToday(d)).toBe(32_000);
+    vi.useRealTimers();
+  });
+
+  it('a session without any fatigue report counts ×1', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-09T10:00:00'));
+    const d = emptyState();
+    ops.startSession(d, { intent: '', plannedMin: 30, tier: 'haiku', effort: 'medium' });
+    vi.setSystemTime(new Date('2026-10-09T10:30:00'));
+    ops.endSession(d, {});
+    expect(d.sessions[0].tokens).toBe(12_000);
     vi.useRealTimers();
   });
 

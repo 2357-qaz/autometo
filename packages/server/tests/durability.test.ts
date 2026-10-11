@@ -26,7 +26,7 @@ function device(id: string, disk?: { doc: string | null }) {
   const { state } = p.load();
   const store = createStore(state, p.persist, 150);
   p.attach(store);
-  const client = new SyncClient(store, { loadConfig: () => ({ url, token: TOKEN }), saveConfig() {}, loadMeta: p.loadMeta, saveMeta: p.saveMeta });
+  const client = new SyncClient(store, { loadConfig: () => ({ url, token: TOKEN }), saveConfig() {}, loadMeta: p.loadMeta, updateMeta: p.updateMeta });
   return { store, client, disk: d, state: () => store.get() };
 }
 const snapshotDisk = (dev: ReturnType<typeof device>) => ({ doc: dev.disk.doc });

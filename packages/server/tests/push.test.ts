@@ -63,7 +63,7 @@ describe('web push', () => {
       g.createdAt -= 8 * 86_400_000;
     });
     let meta: SyncMeta = newSyncMeta('phone');
-    const client = new SyncClient(store, { loadConfig: () => ({ url, token: TOKEN }), saveConfig() {}, loadMeta: () => meta, saveMeta: (m) => void (meta = m) });
+    const client = new SyncClient(store, { loadConfig: () => ({ url, token: TOKEN }), saveConfig() {}, loadMeta: () => meta, updateMeta: (fn) => void (meta = fn(meta ?? newSyncMeta())) });
     await client.syncNow(true);
 
     const first = await push.tick();

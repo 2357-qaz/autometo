@@ -1,7 +1,7 @@
 // File storage under ~/.automedo (override with AUTOMEDO_HOME).
 // state.json holds the state AND the sync meta, written atomically (temp file + rename),
 // so a sync round is committed by a single rename.
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, watch } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync, watch } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createDocPersistence, type AppState, type DocPersistence, type Store, type SyncConfig, type SyncMeta, type SyncStorage } from '@automedo/core';
@@ -16,17 +16,68 @@ function ensureDir() {
   mkdirSync(homeDir(), { recursive: true, mode: 0o700 });
 }
 
-/** Write via temp file + rename so a crash never leaves half a file behind. */
+/**
+ * Write via temp file + rename so a crash never leaves half a file behind, with the
+ * data flushed to the disk before the rename and the rename flushed after it — so it
+ * also holds across a power cut, not just a crashed process.
+ */
 function writeAtomic(path: string, data: string, mode = 0o600) {
   ensureDir();
   const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, data, { mode });
+  const fd = openSync(tmp, 'w', mode);
+  try {
+    writeSync(fd, data);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(tmp, path);
+  try {
+    const dir = openSync(homeDir(), 'r');
+    try {
+      fsyncSync(dir);
+    } finally {
+      closeSync(dir);
+    }
+  } catch {
+    /* some platforms (Windows) cannot fsync a directory */
+  }
 }
 
 function readJson<T>(path: string): T | null {
   if (!existsSync(path)) return null;
   return JSON.parse(readFileSync(path, 'utf8')) as T;
+}
+
+/**
+ * Cross-process lock around read → merge → write of state.json (a lock file created
+ * exclusively). A lock older than 10 s is from a crashed process and is taken over.
+ */
+function withLock<T>(fn: () => T): T {
+  ensureDir();
+  const lock = file('state.json.lock');
+  const deadline = Date.now() + 5000;
+  const nap = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try {
+      closeSync(openSync(lock, 'wx'));
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > 10_000) rmSync(lock, { force: true });
+      } catch {
+        /* released meanwhile */
+      }
+      if (Date.now() > deadline) throw new Error('数据文件正被另一个 automedo 进程写入，稍后重试');
+      Atomics.wait(nap, 0, 0, 10);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    rmSync(lock, { force: true });
+  }
 }
 
 let lastWrite = 0;
@@ -41,6 +92,7 @@ function persistence(): DocPersistence {
         writeAtomic(file('state.json'), t);
         lastWrite = statSync(file('state.json')).mtimeMs;
       },
+      exclusive: withLock,
     },
     // Versions before the single-document format kept the meta in its own file.
     () => {
@@ -74,7 +126,7 @@ export function attachStore(store: Store) {
   persistence().attach(store);
 }
 
-/** Reload after another process (e.g. `automedo done`) rewrote the file; also picks up its sync meta. */
+/** Another process (e.g. `automedo done`) rewrote the file: merge it with ours (null: nothing new). */
 export function reloadState(): AppState | null {
   return persistence().reload();
 }
@@ -101,8 +153,8 @@ export const fileSyncStorage: SyncStorage = {
   loadConfig: () => readJson<SyncConfig>(file('sync.json')),
   saveConfig: (c) => (c ? writeAtomic(file('sync.json'), JSON.stringify(c, null, 2)) : rmSync(file('sync.json'), { force: true })),
   loadMeta: () => persistence().loadMeta(),
-  saveMeta: (m) => {
-    persistence().saveMeta(m);
+  updateMeta: (fn) => {
+    persistence().updateMeta(fn);
     rmSync(file('sync-meta.json'), { force: true }); // migrated into state.json
   },
 };

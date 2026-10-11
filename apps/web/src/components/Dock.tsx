@@ -15,9 +15,11 @@ export function Dock({ ws, sel, setSel }: { ws: Workspace; sel: string | null; s
   const sess = activeSession(state);
   const ordered = ops.orderedTasks(ws);
   const num = (id: string) => ordered.findIndex((t) => t.id === id) + 1;
-  const active = ordered.find((t) => t.status === 'active');
+  // This device's task in progress; other devices may be working on their own.
+  const active = ops.currentTask(ws, state);
+  const elsewhere = ops.otherActiveTasks(ws, state);
   const phase = ws.kind === 'plan' ? ops.currentPhase(ws) : undefined;
-  const open_ = ordered.filter((t) => t.status !== 'done' && t.status !== 'skipped' && t.id !== active?.id);
+  const open_ = ordered.filter((t) => t.status !== 'done' && t.status !== 'skipped' && t.id !== active?.id && !elsewhere.includes(t));
   // Current phase first, later phases after.
   const now = phase ? open_.filter((t) => t.phaseId === phase.id) : open_;
   const later = phase ? open_.filter((t) => t.phaseId !== phase.id) : [];
@@ -78,6 +80,11 @@ export function Dock({ ws, sel, setSel }: { ws: Workspace; sel: string | null; s
       <span className="elbow">⎿</span>
       <div className="dock-list">
         {head}
+        {elsewhere.map((t) => (
+          <div key={t.id} className="dock-elsewhere" data-task-id={t.id}>
+            <span className="violet">◆</span> <span>{t.title}</span> <span className="faint">#{num(t.id)}</span> <span className="violet">另一台设备进行中</span>
+          </div>
+        ))}
         {shown.map((t, i) => (
           <div key={t.id}>
             {phase && later.length > 0 && t.id === later[0].id && <div className="todo-sep faint">之后的阶段</div>}

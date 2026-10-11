@@ -5,7 +5,7 @@ import { App } from '../src/ui';
 import { editLine, lineFrom } from '../src/lineedit';
 
 const wait = (ms = 30) => new Promise((r) => setTimeout(r, ms));
-const noSync: SyncStorage = { loadConfig: () => null, saveConfig: () => {}, loadMeta: () => null, saveMeta: () => {} };
+const noSync: SyncStorage = { loadConfig: () => null, saveConfig: () => {}, loadMeta: () => null, updateMeta: () => {} };
 // ANSI-stripped full output (static scrollback + live area).
 const plain = (s: string) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
 
@@ -34,6 +34,8 @@ const ENTER = '\r';
 const ESC = '\x1b';
 const SHIFT_TAB = '\x1b[Z';
 const DOWN = '\x1b[B';
+const LEFT = '\x1b[D';
+const RIGHT = '\x1b[C';
 
 describe('line editor', () => {
   it('inserts CJK, moves the cursor, deletes words', () => {
@@ -63,6 +65,75 @@ describe('interactive app', () => {
     expect(t.store.get().plans[0].tasks[0].title).toBe('读文献');
     expect(t.all()).toContain('Write(Plan)');
     expect(t.last()).toContain('读文献  #1');
+    t.unmount();
+  });
+
+  it('keeps the prompt and status line at the bottom: menus and forms open above them', async () => {
+    const t = setup(true);
+    await t.type('/');
+    let rows = t.last().trimEnd().split('\n');
+    const promptRow = rows.findIndex((l) => l.includes('> /'));
+    expect(rows.findIndex((l) => l.includes('/phase'))).toBeLessThan(promptRow);
+    expect(rows.at(-1)).toContain('Sonnet');
+    await t.key(ESC);
+    await t.type('/session');
+    await t.key(ENTER);
+    rows = t.last().trimEnd().split('\n');
+    expect(rows.findIndex((l) => l.includes('开始专注 Session'))).toBeLessThan(rows.findIndex((l) => l.includes('正在填写上方的表单')));
+    expect(rows.at(-1)).toContain('Sonnet');
+    t.unmount();
+  });
+
+  it('/model opens a picker in the bottom bar: ← then enter switches Opus → Sonnet', async () => {
+    const t = setup(true);
+    t.store.mutate(null, (d) => void (d.hie.tier = 'opus'));
+    await t.type('/model');
+    await t.key(ENTER);
+    let rows = t.last().trimEnd().split('\n');
+    expect(rows.find((l) => l.includes('模型档位'))).toContain('‹ Opus ›');
+    expect(rows.at(-1)).toContain('←→ 选择');
+    await t.key(LEFT);
+    rows = t.last().trimEnd().split('\n');
+    expect(rows.find((l) => l.includes('模型档位'))).toContain('‹ Sonnet ›');
+    expect(rows.at(-1)).toContain('Sonnet'); // status line previews the choice
+    expect(t.store.get().hie.tier).toBe('opus'); // …but nothing changes before enter
+    await t.key(ENTER);
+    expect(t.store.get().hie.tier).toBe('sonnet');
+    expect(t.last()).toContain('添加任务');
+    t.unmount();
+  });
+
+  it('←→ on a highlighted /effort suggestion opens the picker one step over; esc cancels', async () => {
+    const t = setup(true);
+    await t.type('/effort');
+    expect(t.last()).toContain('←→ 直接选择');
+    await t.key(RIGHT);
+    expect(t.last()).toContain('‹ high ›');
+    await t.key(ESC);
+    expect(t.store.get().hie.effort).toBe('medium');
+    await t.type('/fatigue');
+    await t.key(ENTER);
+    await t.type('5');
+    expect(t.store.get().fatigue.at(-1)?.level).toBe(5);
+    t.unmount();
+  });
+
+  it('confirmations happen in the bottom bar: n keeps, y deletes', async () => {
+    const t = setup(true);
+    const n0 = t.store.get().plans.length + t.store.get().goals.length;
+    await t.key('\x0f'); // ctrl+o
+    await t.key('\x04'); // ctrl+d
+    expect(t.last()).toContain('y 删除 · n 取消');
+    await t.key('n');
+    expect(t.store.get().plans.length + t.store.get().goals.length).toBe(n0);
+    await t.key('\x0f');
+    await t.key('\x04');
+    await t.key(ENTER); // a dangerous confirm ignores enter: it needs y
+    expect(t.store.get().plans.length + t.store.get().goals.length).toBe(n0);
+    await t.key('\x0f');
+    await t.key('\x04');
+    await t.key('y');
+    expect(t.store.get().plans.length + t.store.get().goals.length).toBe(n0 - 1);
     t.unmount();
   });
 

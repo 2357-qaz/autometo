@@ -24,14 +24,23 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.includes('/v1/')) return; // sync API: always live
   if (req.mode === 'navigate') {
     // App shell: network first so updates arrive, cached copy when offline.
+    // Only a good HTML response may replace the cached shell; on a server error,
+    // prefer the last known-good shell over the error page.
+    const cached = () => caches.match('./', { ignoreSearch: true });
     event.respondWith(
       fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put('./', copy));
+        .then(async (res) => {
+          const html = (res.headers.get('content-type') || '').includes('text/html');
+          if (res.ok && html) {
+            const copy = res.clone();
+            const write = caches.open(CACHE).then((c) => c.put('./', copy));
+            if (event.waitUntil) event.waitUntil(write);
+            return res;
+          }
+          if (res.status >= 500) return (await cached()) || res;
           return res;
         })
-        .catch(() => caches.match('./', { ignoreSearch: true })),
+        .catch(cached),
     );
     return;
   }

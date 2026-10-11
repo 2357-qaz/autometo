@@ -1,0 +1,375 @@
+
+> automedo@0.2.0 audit:strict
+> AUTOMEDO_AUDIT_STRICT=1 vitest run --config audit/vitest.config.ts
+
+
+ RUN  v5.0.3 /workspace/autometo-audit
+
+ ❯ audit/regression.test.ts (16 tests | 16 failed) 1638ms
+   ❯ lostAcknowledgement (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 10ms
+   ❯ undoRemote (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 4ms
+   ❯ versionCollision (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 1ms
+   ❯ concurrentActive (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 1ms
+   ❯ rollbackDuringConnect (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 1ms
+   ❯ serverRollback (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 1ms
+   ❯ flushRetry (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 0ms
+   ❯ duplicateImport (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 0ms
+   ❯ reviseBaseline (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 0ms
+   ❯ staleConfirmation (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 1ms
+   ❯ orderCollision (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 1ms
+   ❯ inflightPending (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 5ms
+   ❯ fileWriters (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 1ms
+   ❯ browserWriters (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 1ms
+   ❯ cliSaveFailure (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 1ms
+   ❯ poisonedShell (1)
+     × preserves the required reliability invariant (KNOWN DEFECT) 0ms
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 16 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  audit/regression.test.ts > lostAcknowledgement > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R01: {"id":"R01","actual":"A stale retry","expected":"B acknowledged"}: expected 'A stale retry' to deeply equal 'B acknowledged'
+
+Expected: "B acknowledged"
+Received: "A stale retry"
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/16]⎯
+
+ FAIL  audit/regression.test.ts > undoRemote > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R02: {"id":"R02","actual":false,"expected":true,"detail":{"serverTitles":["original"],"guard":null}}: expected false to deeply equal true
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/16]⎯
+
+ FAIL  audit/regression.test.ts > versionCollision > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R04: {"id":"R04","actual":["snapshot B"],"expected":["snapshot A","snapshot B"],"detail":{"commitLogs":2}}: expected [ 'snapshot B' ] to deeply equal [ 'snapshot A', 'snapshot B' ]
+
+- Expected
++ Received
+
+  [
+-   "snapshot A",
+    "snapshot B",
+  ]
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/16]⎯
+
+ FAIL  audit/regression.test.ts > concurrentActive > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R05: {"id":"R05","actual":{"activeTasks":2,"activeSessions":2},"expected":{"activeTasks":1,"activeSessions":1}}: expected { activeTasks: 2, activeSessions: 2 } to deeply equal { activeTasks: 1, activeSessions: 1 }
+
+- Expected
++ Received
+
+  {
+-   "activeSessions": 1,
+-   "activeTasks": 1,
++   "activeSessions": 2,
++   "activeTasks": 2,
+  }
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/16]⎯
+
+ FAIL  audit/regression.test.ts > rollbackDuringConnect > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R06: {"id":"R06","actual":false,"expected":true,"detail":{"config":null,"diskTitles":["original"]}}: expected false to deeply equal true
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/16]⎯
+
+ FAIL  audit/regression.test.ts > serverRollback > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R07: {"id":"R07","actual":{"a":"acknowledged new value","b":"original","status":"idle"},"expected":{"a":"acknowledged new value","b":"acknowledged new value","status":"idle"}}: expected { a: 'acknowledged new value', …(2) } to deeply equal { a: 'acknowledged new value', …(2) }
+
+- Expected
++ Received
+
+  {
+    "a": "acknowledged new value",
+-   "b": "acknowledged new value",
++   "b": "original",
+    "status": "idle",
+  }
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/16]⎯
+
+ FAIL  audit/regression.test.ts > flushRetry > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R08: {"id":"R08","actual":"original","expected":"must persist","detail":{"writes":1,"error":"保存失败：injected ENOSPC"}}: expected 'original' to deeply equal 'must persist'
+
+Expected: "must persist"
+Received: "original"
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/16]⎯
+
+ FAIL  audit/regression.test.ts > duplicateImport > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R09: {"id":"R09","actual":false,"expected":true,"detail":{"before":2,"afterSyncRoundTrip":1}}: expected false to deeply equal true
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/16]⎯
+
+ FAIL  audit/regression.test.ts > reviseBaseline > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R10: {"id":"R10","actual":"changed goal","expected":"original goal","detail":[{"v":1,"goal":"changed goal"},{"v":2,"goal":"changed goal"}]}: expected 'changed goal' to deeply equal 'original goal'
+
+Expected: "original goal"
+Received: "changed goal"
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/16]⎯
+
+ FAIL  audit/regression.test.ts > staleConfirmation > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R11: {"id":"R11","actual":["P"],"expected":["P","q","r"],"detail":{"approvedNames":["P","q"],"newGuard":null}}: expected [ 'P' ] to deeply equal [ 'P', 'q', 'r' ]
+
+- Expected
++ Received
+
+  [
+    "P",
+-   "q",
+-   "r",
+  ]
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/16]⎯
+
+ FAIL  audit/regression.test.ts > orderCollision > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R12: {"id":"R12","actual":["original","A appended","B appended"],"expected":["original","B appended","A appended"],"detail":{"initial":{"a":["original","A appended","B appended"],"b":["original","B appended","A appended"]},"finalA":["original","A appended","B appended"],"finalB":["original","B appended","A appended"]}}: expected [ 'original', 'A appended', …(1) ] to deeply equal [ 'original', 'B appended', …(1) ]
+
+- Expected
++ Received
+
+  [
+    "original",
+-   "B appended",
+    "A appended",
++   "B appended",
+  ]
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/16]⎯
+
+ FAIL  audit/regression.test.ts > inflightPending > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R13: {"id":"R13","actual":0,"expected":2,"detail":{"phase":"idle"}}: expected +0 to deeply equal 2
+
+- Expected
++ Received
+
+- 2
++ 0
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/16]⎯
+
+ FAIL  audit/regression.test.ts > fileWriters > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R03T: {"id":"R03T","actual":["from B","original"],"expected":["from A","from B","original"]}: expected [ 'from B', 'original' ] to deeply equal [ 'from A', 'from B', 'original' ]
+
+- Expected
++ Received
+
+  [
+-   "from A",
+    "from B",
+    "original",
+  ]
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/16]⎯
+
+ FAIL  audit/regression.test.ts > browserWriters > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R03W: {"id":"R03W","actual":["from B","original"],"expected":["from A","from B","original"]}: expected [ 'from B', 'original' ] to deeply equal [ 'from A', 'from B', 'original' ]
+
+- Expected
++ Received
+
+  [
+-   "from A",
+    "from B",
+    "original",
+  ]
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/16]⎯
+
+ FAIL  audit/regression.test.ts > cliSaveFailure > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R08T: {"id":"R08T","actual":{"successfulExit":true,"errorReported":false},"expected":{"successfulExit":false,"errorReported":true},"detail":{"stdout":"⏺ Write(Plan)\n  ⎿  1 处新增\n       2 + ☐ not saved  phase\n  ⎿  ◇ 没有进行中的任务 · /start 开始下一个\n     ☐ original  #1\n     ☐ not saved  #2","stderr":"","persisted":false}}: expected { successfulExit: true, …(1) } to deeply equal { successfulExit: false, …(1) }
+
+- Expected
++ Received
+
+  {
+-   "errorReported": true,
+-   "successfulExit": false,
++   "errorReported": false,
++   "successfulExit": true,
+  }
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/16]⎯
+
+ FAIL  audit/regression.test.ts > poisonedShell > preserves the required reliability invariant (KNOWN DEFECT)
+AssertionError: R14: {"id":"R14","actual":{"status":503,"body":"temporary outage"},"expected":{"status":200,"body":"<html>working shell</html>"}}: expected { status: 503, …(1) } to deeply equal { status: 200, …(1) }
+
+- Expected
++ Received
+
+  {
+-   "body": "<html>working shell</html>",
+-   "status": 200,
++   "body": "temporary outage",
++   "status": 503,
+  }
+
+ ❯ audit/regression.test.ts:20:78
+     18|     afterAll(() => vi.restoreAllMocks());
+     19|     regression('preserves the required reliability invariant (KNOWN DE…
+     20|       expect(evidence.actual, `${evidence.id}: ${JSON.stringify(eviden…
+       |                                                                              ^
+     21|     });
+     22|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/16]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  16 failed | 13 passed (29)
+   Start at  00:32:08
+   Duration  3.40s (tests 78%, transform 15%, import 7%)
+

@@ -1,20 +1,25 @@
 // The interactive terminal UI. History is printed once into the terminal's own
 // scrollback (<Static>); only the bottom area (spinner, todos, prompt, status) redraws.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Box, Static, Text, useApp, useInput, useStdout, type Key } from 'ink';
+import { Box, measureElement, Static, Text, useApp, useInput, useStdout, type DOMElement, type Key } from 'ink';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   activeSession,
+  describeUndo,
+  otherSessions,
   budgetLevel,
+  pickSpec,
+  type PickKind,
   COMMANDS,
   currentWs,
   execute,
   fmtAgo,
   fmtTokens,
   hieAdvice,
+  fatigueMult,
   latestFatigue,
   matchCommands,
   needsArg,
@@ -24,6 +29,8 @@ import {
   tokensToday,
   fmtDuration,
   type AppState,
+  type Effort,
+  type Tier,
   type CmdCtx,
   type Intent,
   type Store,
@@ -31,7 +38,7 @@ import {
   type SyncStatus,
   type Workspace,
 } from '@automedo/core';
-import { bar, C, dockLines, pad, effortSegs, eventLines, helpLines, historyBlocks, planDiffLines, tierSegs, welcomeLines, wsHeaderLines, type Line, type Seg } from './format';
+import { bar, C, displayWidth, dockLines, pad, effortSegs, eventLines, helpLines, historyBlocks, planDiffLines, tierSegs, welcomeLines, wsHeaderLines, type Line, type Seg } from './format';
 import { formFor, type Field, type FormSpec, type SubmitResult, type Values } from './forms';
 import { editLine, emptyLine, lineFrom, type LineState } from './lineedit';
 
@@ -89,6 +96,24 @@ function useSync(sync: SyncClient): SyncStatus {
 const GLYPHS = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢'];
 const VERBS = ['Focusing', 'Crafting', 'Pondering', 'Tinkering', 'Grinding', 'Building', 'Untangling', 'Noodling'];
 
+/** Sessions running on other devices: shown (and endable), never silently closed. */
+function OtherSessions({ state }: { state: AppState }) {
+  const others = otherSessions(state);
+  if (!others.length) return null;
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {others.map((s) => (
+        <Text key={s.id}>
+          <Text color={C.violet}>✻ 另一台设备专注中 </Text>
+          <Text color={C.dim}>
+            ({fmtDuration(Date.now() - runStartedAt(state, s.runId))} / {s.plannedMin}m{s.intent ? ` · ${s.intent}` : ''} · 忘了结束可以 /end other)
+          </Text>
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
 function Spinner({ state }: { state: AppState }) {
   const s = activeSession(state);
   const [tick, setTick] = useState(0);
@@ -116,40 +141,101 @@ function Spinner({ state }: { state: AppState }) {
 
 // ───────────────────────── status line ─────────────────────────
 
-function StatusLine({ state, sync, notice }: { state: AppState; sync: SyncClient; notice: string | null }) {
+type ConfirmIntent = Extract<Intent, { type: 'confirm' }>;
+/** A choice made in place, in the bottom bar (instead of a form above). */
+type Bar = { kind: 'pick'; what: PickKind; idx: number } | { kind: 'confirm'; intent: ConfirmIntent };
+
+const PREVIEW_BG = '#3a3f4b';
+const PICK_CMDS: Record<string, PickKind> = { model: 'tier', effort: 'effort', fatigue: 'fatigue' };
+
+/** The prompt box while a bar choice is open: the options in a row, the current one bracketed. */
+function BarLine({ bar, state }: { bar: Bar; state: AppState }) {
+  if (bar.kind === 'confirm') {
+    const i = bar.intent;
+    return (
+      <Text>
+        <Text color={i.danger ? C.red : C.accent} bold>
+          {i.title}
+        </Text>
+        <Text color={C.dim}>  {i.message}</Text>
+      </Text>
+    );
+  }
+  const spec = pickSpec(bar.what, state);
+  const o = spec.options[bar.idx];
+  return (
+    <Text>
+      <Text color={C.dim}>{spec.title}  </Text>
+      {spec.options.map((x, k) => (
+        <Text key={x.value}>
+          {k === bar.idx ? (
+            <Text color={C.accent} bold>
+              ‹ {x.label} ›
+            </Text>
+          ) : (
+            <Text color={k === spec.current ? C.fg2 : C.faint}>  {x.label}  </Text>
+          )}
+          <Text> </Text>
+        </Text>
+      ))}
+      <Text color={C.dim}>  {o.hint}</Text>
+    </Text>
+  );
+}
+
+function StatusLine({ state, sync, notice, preview, keys, saveError }: { state: AppState; sync: SyncClient; notice: string | null; preview?: { what: PickKind; value: string }; keys?: string; saveError?: string | null }) {
   const st = useSync(sync);
   const cols = (useStdout().stdout as NodeJS.WriteStream).columns ?? 100;
   const used = tokensToday(state);
   const budget = state.settings.dailyBudget;
   const lvl = budgetLevel(used, budget);
-  const fat = latestFatigue(state);
-  const advice = currentWs(state) ? hieAdvice(used, budget, fat) : null;
+  const fat = preview?.what === 'fatigue' ? Number(preview.value) : latestFatigue(state);
+  const tier = preview?.what === 'tier' ? (preview.value as Tier) : state.hie.tier;
+  const effort = preview?.what === 'effort' ? (preview.value as Effort) : state.hie.effort;
+  const hl = (what: PickKind, segs: Seg[]) => (preview?.what === what ? segs.map((x) => ({ ...x, bg: PREVIEW_BG })) : segs);
+  const advice = currentWs(state) ? hieAdvice(used, budget, latestFatigue(state)) : null; // real values, not the preview
   const syncSeg: Seg =
     st.phase === 'off' ? { t: '本地', c: C.faint }
     : st.phase === 'syncing' ? { t: '⟳ 同步中', c: C.blue }
     : st.phase === 'offline' ? { t: '⚠ 离线', c: C.yellow }
     : st.confirm ? { t: '⏸ 同步暂停：大量删除待确认（/sync）', c: C.yellow }
+    : st.conflicts.length ? { t: `⚠ ${st.conflicts.length} 处同时编辑已合并（/sync 查看）`, c: C.yellow }
     : st.phase === 'error' ? { t: `✗ ${st.error ?? '同步失败'}`, c: C.red }
     : { t: `✓ 已同步${st.lastSyncAt ? ` ${fmtAgo(st.lastSyncAt)}` : ''}`, c: C.dim };
   const dot: Seg = { t: ' · ', c: C.faint };
-  const right: Seg[] = [
-    ...tierSegs(state.hie.tier),
-    dot,
-    ...effortSegs(state.hie.effort),
-    dot,
+  const budgetSegs: Seg[] = [
     { t: bar(used / budget, 6), c: lvl === 'ok' ? C.dim : lvl === 'warn' ? C.yellow : C.red },
     { t: ` ${fmtTokens(used)}/${fmtTokens(budget)}`, c: lvl === 'ok' ? C.dim : lvl === 'warn' ? C.yellow : C.red },
-    dot,
-    { t: fat ? `疲劳 ${fat}/5` : '疲劳 –', c: fat && fat >= 4 ? C.yellow : C.dim },
-    dot,
-    syncSeg,
   ];
+  const fatigueSeg0: Seg = { t: fat ? `疲劳 ${fat}/5${fatigueMult(fat) > 1 ? ` ×${fatigueMult(fat)}` : ''}` : '疲劳 –', c: fat && fat >= 4 ? C.yellow : C.dim };
+  const join = (groups: Seg[][]) => groups.flatMap((g, i) => (i ? [dot, ...g] : g));
   const mode = state.ui.mode;
-  const narrow = cols < 100;
-  const shown = narrow ? right.filter((_x, i) => !(i >= 4 && i <= 6)) : right; // drop the budget bar when narrow
   const message = notice ?? advice;
+  const modeText = mode === 'plan' ? '⏸ plan mode on' : '⏵⏵ goal mode on';
+  const width = (segs: Seg[]) => segs.reduce((a, x) => a + displayWidth(x.t), 0);
+  // Drop the least important parts until both halves fit on one line.
+  const variants = [
+    { tab: true, help: !message, budget: true },
+    { tab: true, help: false, budget: true },
+    { tab: false, help: false, budget: true },
+    { tab: false, help: false, budget: false },
+  ];
+  const build = (v: (typeof variants)[number]) => ({
+    v,
+    right: join([hl('tier', tierSegs(tier)), hl('effort', effortSegs(effort)), ...(v.budget ? [budgetSegs] : []), hl('fatigue', [fatigueSeg0]), [syncSeg]]),
+    left: displayWidth(modeText) + (keys ? 2 + displayWidth(keys) : (v.tab ? 12 : 0) + (v.help ? 17 : 0)),
+  });
+  const fit = variants.map(build).find((x) => x.left + 2 + width(x.right) + 2 <= cols) ?? build(variants[variants.length - 1]);
+  const shown = fit.right;
   return (
     <Box flexDirection="column">
+      {saveError ? (
+        <Box paddingX={1}>
+          <Text color={C.red} wrap="wrap">
+            ✗ {saveError}（修改还在内存里，会自动重试；在恢复之前不要关闭终端）
+          </Text>
+        </Box>
+      ) : null}
       {message ? (
         <Box paddingX={1}>
           <Text color={C.yellow} wrap="wrap">
@@ -159,9 +245,15 @@ function StatusLine({ state, sync, notice }: { state: AppState; sync: SyncClient
       ) : null}
       <Box justifyContent="space-between" paddingX={1}>
         <Text wrap="truncate-end">
-          <Text color={mode === 'plan' ? C.teal : C.violet}>{mode === 'plan' ? '⏸ plan mode on' : '⏵⏵ goal mode on'}</Text>
-          {narrow ? null : <Text color={C.faint}> (shift+tab)</Text>}
-          {message ? null : <Text color={C.faint}>  ? for shortcuts</Text>}
+          <Text color={mode === 'plan' ? C.teal : C.violet}>{modeText}</Text>
+          {keys ? (
+            <Text color={C.accent}>  {keys}</Text>
+          ) : (
+            <>
+              {fit.v.tab ? <Text color={C.faint}> (shift+tab)</Text> : null}
+              {fit.v.help ? <Text color={C.faint}>  ? for shortcuts</Text> : null}
+            </>
+          )}
         </Text>
         <Text wrap="truncate-start">
           {shown.map((x, i) => (
@@ -438,6 +530,25 @@ function introBlocks(state: AppState, loadError: string | null): Block[] {
   return out;
 }
 
+/**
+ * Keep the prompt and status line on the terminal's last rows. Ink appends below the
+ * transcript, so a live area that shrinks (a menu or form closing) would pull them up.
+ * Track the highest the output has reached (transcript lines + live area) and pad the
+ * top of the live area up to it; new transcript lines use up that padding in the same frame.
+ */
+function useBottomPin(blocks: Block[], rows: number) {
+  const ref = useRef<DOMElement>(null);
+  const printed = useMemo(() => blocks.reduce((a, b) => a + b.lines.length, 0), [blocks]);
+  const [top, setTop] = useState(0);
+  useEffect(() => setTop(0), [rows]); // re-measure after a resize
+  useEffect(() => {
+    if (!ref.current) return;
+    const reach = printed + measureElement(ref.current).height;
+    if (reach > top) setTop(reach);
+  });
+  return { ref, minHeight: Math.max(0, Math.min(top - printed, rows - 1)) };
+}
+
 export function App({ store, sync, loadError = null }: { store: Store; sync: SyncClient; loadError?: string | null }) {
   const state = useStore(store);
   const { exit } = useApp();
@@ -449,6 +560,7 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
   const [histIdx, setHistIdx] = useState(-1);
   const [sugIdx, setSugIdx] = useState(0);
   const [intent, setIntent] = useState<Intent | null>(null);
+  const [bar, setBar] = useState<Bar | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const ctrlC = useRef(0);
   const ws = currentWs(state);
@@ -483,6 +595,14 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
         d.ui.dismissedCompactId = c.id;
       });
       return print([[], [{ t: '⏺ ', c: C.blue }, { t: 'Resume', b: true }, { t: `  ${fmtAgo(c.at)}`, c: C.faint }], ...c.text.split('\n').map((l) => [{ t: '     ' + l, c: C.fg2 }])]);
+    }
+    if (i.type === 'pick') {
+      setIntent(null);
+      return setBar({ kind: 'pick', what: i.what, idx: Math.max(0, pickSpec(i.what, store.get()).current) });
+    }
+    if (i.type === 'confirm') {
+      setIntent(null);
+      return setBar({ kind: 'confirm', intent: i });
     }
     if (i.type !== 'switch' && !formFor(i, store, sync)) return print([[{ t: '  ⎿  无法打开这个表单', c: C.red }]]);
     setIntent(i);
@@ -542,8 +662,8 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
       if (key.ctrl && input === 'f') return run(activeSession(store.get()) ? '/end' : '/session', false);
       if (key.ctrl && input === 'n') return run('/next');
       if (key.ctrl && input === 'z') {
-        const l = store.undo();
-        return print([[{ t: '  ⎿  ', c: C.faint }, { t: l ? `已撤销：${l}` : '没有可撤销的操作', c: l ? C.dim : C.red }]]);
+        const r = describeUndo(store.undo());
+        return print([[{ t: '  ⎿  ', c: C.faint }, { t: r.text, c: r.error ? C.red : C.dim }]]);
       }
       if (key.ctrl && input === 'l') {
         stdout.write('\x1b[2J\x1b[3J\x1b[H');
@@ -551,6 +671,14 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
       }
       if (input === '?' && !line.value) return print(helpLines(COMMANDS));
       if (showSugs) {
+        const pickWhat = PICK_CMDS[sugs[sel]?.name ?? ''];
+        if (pickWhat && (key.leftArrow || key.rightArrow) && line.cursor === Array.from(line.value).length) {
+          const spec = pickSpec(pickWhat, store.get());
+          const n = spec.options.length;
+          const cur = Math.max(0, spec.current);
+          setLine(emptyLine);
+          return setBar({ kind: 'pick', what: pickWhat, idx: (cur + (key.leftArrow ? n - 1 : 1)) % n });
+        }
         if (key.upArrow) return setSugIdx((sel - 1 + sugs.length) % sugs.length);
         if (key.downArrow) return setSugIdx((sel + 1) % sugs.length);
         if (key.tab) {
@@ -595,7 +723,47 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
         setHistIdx(-1);
       }
     },
-    { isActive: !intent },
+    { isActive: !intent && !bar },
+  );
+
+  // Report what a store change did, unless it already shows up as a workspace event.
+  const report = (fn: () => unknown) => {
+    const before = currentWs(store.get());
+    const n0 = before?.log.length ?? 0;
+    try {
+      const r = fn();
+      const after = currentWs(store.get());
+      if (typeof r === 'string' && !(after?.id === before?.id && (after?.log.length ?? 0) > n0)) print([[{ t: '  ⎿  ', c: C.faint }, { t: r, c: C.dim }]]);
+    } catch (e) {
+      print([[{ t: '  ⎿  ', c: C.faint }, { t: (e as Error).message, c: C.red }]]);
+    }
+  };
+
+  useInput(
+    (input: string, key: Key) => {
+      if (!bar) return;
+      if (key.escape || (key.ctrl && input === 'c')) return setBar(null);
+      if (bar.kind === 'confirm') {
+        const yes = input.toLowerCase() === 'y' || (key.return && !bar.intent.danger);
+        if (yes) {
+          setBar(null);
+          return report(() => bar.intent.onConfirm()); // it does its own store.mutate
+        }
+        if (input.toLowerCase() === 'n' || key.return) setBar(null);
+        return;
+      }
+      const spec = pickSpec(bar.what, store.get());
+      const n = spec.options.length;
+      const choose = (k: number) => {
+        setBar(null);
+        report(() => store.mutate(spec.label, (d) => spec.apply(d, spec.options[k].value)));
+      };
+      if (key.leftArrow || input === 'h' || (key.tab && key.shift)) return setBar({ ...bar, idx: (bar.idx + n - 1) % n });
+      if (key.rightArrow || input === 'l' || key.tab) return setBar({ ...bar, idx: (bar.idx + 1) % n });
+      if (/^[1-9]$/.test(input) && Number(input) <= n) return choose(Number(input) - 1);
+      if (key.return) return choose(bar.idx);
+    },
+    { isActive: !!bar },
   );
 
   const spec = intent && intent.type !== 'switch' ? formFor(intent, store, sync) : null;
@@ -612,58 +780,78 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
 
   const placeholder = !ws ? (state.ui.mode === 'plan' ? '输入计划标题并回车，或 /help' : '输入目标并回车，或 /help') : state.ui.mode === 'plan' ? '添加任务…  / 命令  # 记录' : '添加行动…  / 命令  # 记录';
 
+  const pin = useBottomPin(blocks, (stdout as NodeJS.WriteStream).rows ?? 30);
+  const formOpen = !!intent && (intent.type === 'switch' || !!spec);
+
+  // Order matters: everything that comes and goes sits ABOVE the prompt, so the prompt
+  // box and the status line (model · effort · budget · fatigue · sync) stay at the bottom.
   return (
     <>
       <Static items={blocks}>{(b) => <Lines key={b.key} lines={b.lines} />}</Static>
-      <Spinner state={state} />
-      {ws && (
-        <Box marginTop={activeSession(state) ? 0 : 1}>
-          <Lines lines={dockLines(ws)} />
-        </Box>
-      )}
-      {intent?.type === 'switch' ? (
-        <Picker
-          state={state}
-          onClose={() => setIntent(null)}
-          onPick={(w) => {
-            setIntent(null);
-            store.mutate(null, (d) => ops.selectWs(d, w.id));
-          }}
-          onDelete={(w) =>
-            setIntent({
-              type: 'confirm',
-              title: `删除「${w.title}」？`,
-              message: '任务、日志、版本和快照会一起删除。之后可以 ctrl+z 撤销。',
-              confirmLabel: '删除',
-              danger: true,
-              onConfirm: () => store.mutate('删除', (d) => ops.deleteWs(d, w.id)),
-            })
-          }
-        />
-      ) : spec ? (
-        <Form key={JSON.stringify({ ...intent, onConfirm: undefined })} spec={spec} onDone={closeForm} />
-      ) : (
-        <>
-          <Box borderStyle="round" borderColor={C.faint} paddingX={1} marginTop={1}>
-            <Text color={C.dim}>&gt; </Text>
-            <Cursorline st={line} placeholder={placeholder} />
-          </Box>
-          {showSugs && (
-            <Box flexDirection="column" paddingX={2}>
-              {sugs.slice(0, 10).map((c, i) => (
-                <Text key={c.name}>
-                  <Text color={i === sel ? C.accent : C.fg2} bold={i === sel}>
-                    {pad(`/${c.name}`, 14)}
-                  </Text>
-                  <Text color={C.faint}>{pad(c.args ?? '', 26)}</Text>
-                  <Text color={i === sel ? C.fg2 : C.dim}>{c.desc}</Text>
-                </Text>
-              ))}
+      <Box flexDirection="column" justifyContent="flex-end" minHeight={pin.minHeight}>
+        <Box ref={pin.ref} flexDirection="column">
+          <Spinner state={state} />
+          <OtherSessions state={state} />
+          {ws && (
+            <Box marginTop={activeSession(state) ? 0 : 1}>
+              <Lines lines={dockLines(ws, 5, state)} />
             </Box>
           )}
-        </>
-      )}
-      <StatusLine state={state} sync={sync} notice={notice} />
+          {intent?.type === 'switch' ? (
+            <Picker
+              state={state}
+              onClose={() => setIntent(null)}
+              onPick={(w) => {
+                setIntent(null);
+                store.mutate(null, (d) => ops.selectWs(d, w.id));
+              }}
+              onDelete={(w) =>
+                open({
+                  type: 'confirm',
+                  title: `删除「${w.title}」？`,
+                  message: '任务、日志、版本和快照会一起删除。之后可以 ctrl+z 撤销。',
+                  confirmLabel: '删除',
+                  danger: true,
+                  onConfirm: () => store.mutate('删除', (d) => ops.deleteWs(d, w.id)),
+                })
+              }
+            />
+          ) : spec ? (
+            <Form key={JSON.stringify({ ...intent, onConfirm: undefined })} spec={spec} onDone={closeForm} />
+          ) : (
+            <>
+              {showSugs && (
+                <Box flexDirection="column" paddingX={2} marginTop={1}>
+                  {sugs.slice(0, 10).map((c, i) => (
+                    <Text key={c.name}>
+                      <Text color={i === sel ? C.accent : C.fg2} bold={i === sel}>
+                        {pad(`/${c.name}`, 14)}
+                      </Text>
+                      <Text color={C.faint}>{pad(c.args ?? '', 26)}</Text>
+                      <Text color={i === sel ? C.fg2 : C.dim}>{c.desc}</Text>
+                      {i === sel && PICK_CMDS[c.name] ? <Text color={C.accent}>  ←→ 直接选择</Text> : null}
+                    </Text>
+                  ))}
+                </Box>
+              )}
+            </>
+          )}
+          <Box borderStyle="round" borderColor={bar ? (bar.kind === 'confirm' && bar.intent.danger ? C.red : C.accent) : formOpen ? C.faint : C.dim} paddingX={1} marginTop={showSugs ? 0 : 1}>
+            {bar ? (
+              <BarLine bar={bar} state={state} />
+            ) : (
+              <>
+                <Text color={C.dim}>&gt; </Text>
+                {formOpen ? <Text color={C.faint}>{intent?.type === 'switch' ? '↑ 选择 Plan / Goal · esc 关闭' : '↑ 正在填写上方的表单 · esc 取消'}</Text> : <Cursorline st={line} placeholder={placeholder} />}
+              </>
+            )}
+          </Box>
+          <StatusLine state={state} sync={sync} notice={notice} preview={bar?.kind === 'pick' ? { what: bar.what, value: pickSpec(bar.what, state).options[bar.idx].value } : undefined}
+            saveError={store.saveError()}
+            keys={bar ? (bar.kind === 'pick' ? '←→ 选择 · enter 确认 · esc 取消' : `y ${bar.intent.confirmLabel ?? '确认'} · n 取消`) : undefined}
+          />
+        </Box>
+      </Box>
     </>
   );
 }

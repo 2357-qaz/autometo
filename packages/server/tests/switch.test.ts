@@ -28,7 +28,7 @@ function device(id: string, fetchImpl?: typeof fetch, opts: { fresh?: boolean } 
   const p = createDocPersistence({ read: () => disk.doc, write: (t) => void (disk.doc = t) }, opts.fresh ? undefined : () => newSyncMeta(id));
   const store = createStore(p.load().state, p.persist, 0);
   p.attach(store);
-  const client = new SyncClient(store, { loadConfig: () => cfg, saveConfig: (c) => void (cfg = c), loadMeta: p.loadMeta, saveMeta: p.saveMeta }, { fetchImpl });
+  const client = new SyncClient(store, { loadConfig: () => cfg, saveConfig: (c) => void (cfg = c), loadMeta: p.loadMeta, updateMeta: p.updateMeta }, { fetchImpl });
   return { store, client, meta: () => structuredClone(p.loadMeta()), config: () => cfg, state: () => store.get() };
 }
 const titles = (s: ReturnType<ReturnType<typeof device>['state']>, plan: string) => s.plans.find((p) => p.title === plan)?.tasks.map((t) => t.title) ?? [];
@@ -118,12 +118,13 @@ describe('switching servers', () => {
       return fetch(input, init);
     };
     const n = device('N', flaky, { fresh: true });
-    expect(n.meta()).toBeNull();
+    // Something of its own, so the connect has to upload (the request that fails).
+    n.store.mutate('x', (d) => void ops.createPlan(d, '新设备自己的计划'));
     await expect(n.client.connect({ url: OLD, token: TOKEN })).rejects.toThrow();
     expect(n.config()).toBeNull();
-    expect(n.state().plans).toEqual([]); // back to the pre-connect state…
+    expect(n.state().plans.map((p) => p.title)).toEqual(['新设备自己的计划']); // untouched: nothing of the server's merged in…
     const m = n.meta(); // …and the bookkeeping must not claim it ever saw the server's records
-    expect(m === null || (m.cursor === 0 && Object.keys(m.base).length === 0)).toBe(true);
+    expect(m === null || (m.cursor === 0 && !m.synced)).toBe(true);
 
     failSecond = false;
     await n.client.connect({ url: OLD, token: TOKEN });
@@ -131,5 +132,6 @@ describe('switching servers', () => {
     const check = device('Q');
     await check.client.connect({ url: OLD, token: TOKEN });
     expect(titles(check.state(), '服务器上已有的计划')).toEqual(['不能被删']);
+    expect(check.state().plans.some((p) => p.title === '新设备自己的计划')).toBe(true);
   });
 });

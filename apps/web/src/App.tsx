@@ -4,7 +4,7 @@ import type { Intent as Dialog } from '@automedo/core';
 import { execute, type CmdCtx } from '@automedo/core';
 import { activeSession, budgetLevel, hieAdvice, latestFatigue, tokensToday } from '@automedo/core';
 import { ops } from '@automedo/core';
-import { currentWs, normalize, type Store, type SyncClient } from '@automedo/core';
+import { currentWs, parseImport, type Store, type SyncClient } from '@automedo/core';
 import { useStore } from './store';
 import type { AppState, Workspace } from '@automedo/core';
 import { fmtAgo, fmtDate } from '@automedo/core';
@@ -75,7 +75,7 @@ export function App({ store, sync, loadError, launch = null }: { store: Store; s
     if (!f) return;
     let next: AppState;
     try {
-      next = normalize(JSON.parse(await f.text()));
+      next = parseImport(JSON.parse(await f.text()));
     } catch (err) {
       say({ cmd: '/import', text: `导入失败：${(err as Error).message}`, error: true });
       return;
@@ -87,7 +87,8 @@ export function App({ store, sync, loadError, launch = null }: { store: Store; s
       confirmLabel: '覆盖导入',
       danger: true,
       onConfirm: () => {
-        store.replace(next, '导入备份');
+        // The backup may come from another device: this one keeps its own identity.
+        store.replace({ ...next, ui: { ...next.ui, deviceId: store.get().ui.deviceId } }, '导入备份');
         say({ cmd: '/import', text: `已导入 ${next.plans.length} 个 Plan、${next.goals.length} 个 Goal`, undoable: true });
       },
     });

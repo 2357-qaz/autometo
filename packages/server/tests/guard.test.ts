@@ -25,7 +25,7 @@ function device() {
   const p = createDocPersistence({ read: () => disk.doc, write: (t) => void (disk.doc = t) });
   const store = createStore(p.load().state, p.persist, 0);
   p.attach(store);
-  const client = new SyncClient(store, { loadConfig: () => cfg, saveConfig: (c) => void (cfg = c), loadMeta: p.loadMeta, saveMeta: p.saveMeta });
+  const client = new SyncClient(store, { loadConfig: () => cfg, saveConfig: (c) => void (cfg = c), loadMeta: p.loadMeta, updateMeta: p.updateMeta });
   const titles = () => store.get().plans.map((x) => x.title).sort();
   return { store, client, titles, status: () => client.getStatus() };
 }
@@ -134,23 +134,17 @@ describe('mass-delete guard', () => {
     expect(await serverTitles(srv.cfg)).toEqual(['乙', '甲']);
   });
 
-  it('a stale confirmation does not cover more deletions than the user saw', async () => {
+  it('a confirmation covers exactly the records shown, not "up to N" of any', async () => {
     const { srv } = await seeded(['甲', '乙', '丙']);
-    const res = await fetch(`${srv.cfg.url}/v1/sync`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
-      body: JSON.stringify({ clientId: 'zz', cursor: 0, changes: [] }),
-    });
-    const all = (await res.json()) as { records: { id: string; kind: string }[] };
-    const plans = all.records.filter((r) => r.kind === 'plan');
-    const rev = 'zzzzzzzzz.zz';
-    const del = (ids: string[], confirmDeletes?: number) =>
-      fetch(`${srv.cfg.url}/v1/sync`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
-        body: JSON.stringify({ clientId: 'zz', cursor: 0, confirmDeletes, changes: ids.map((id) => ({ id, kind: 'plan', rev, deleted: true })) }),
-      });
-    expect((await del(plans.map((p) => p.id), 2)).status).toBe(409); // 3 > 2
-    expect((await del(plans.map((p) => p.id), 3)).status).toBe(200);
+    const post = (body: unknown) =>
+      fetch(`${srv.cfg.url}/v1/sync`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` }, body: JSON.stringify(body) });
+    const all = (await (await post({ clientId: 'zz', cursor: 0, changes: [] })).json()) as { records: { id: string; kind: string }[] };
+    const plans = all.records.filter((r) => r.kind === 'plan').map((r) => r.id);
+    const del = (confirmDeleteIds?: string[]) => post({ clientId: 'zz', cursor: 0, confirmDeleteIds, changes: plans.map((id) => ({ id, kind: 'plan', rev: 'zzzzzzzzz.zz', deleted: true })) });
+    const first = await del();
+    expect(first.status).toBe(409);
+    expect(((await first.json()) as { ids: string[] }).ids.sort()).toEqual([...plans].sort());
+    expect((await del(plans.slice(0, 2))).status).toBe(409); // two of three confirmed: refused
+    expect((await del(plans)).status).toBe(200);
   });
 });

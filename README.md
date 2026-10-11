@@ -81,11 +81,11 @@ AUTOMEDO_TOKEN=$(openssl rand -base64 32) AUTOMEDO_WEB_DIR=apps/web/dist npm run
 
 两种模式共用的投入管理隐喻：
 
-- **模型档位** `/model haiku|sonnet|opus` — 400 / 800 / 1500 tokens·min⁻¹
+- **模型档位** `/model haiku|sonnet|opus` — 400 / 800 / 1500 tokens·min⁻¹；`/model`、`/effort`、`/fatigue` 不带参数时弹出选择（终端里在底栏原地 ←→ 选择、回车确认）
 - **推理强度** `/effort low|medium|high` — ×0.6 / ×1 / ×1.5
 - **专注 Session** `/session`、`/end` — 计时并按档位累计 Token；中途切档会分段计费
 - **每日预算** `/budget 200k` — 顶栏额度条；剩余 40% / 15% 时变色并建议 `/compact`
-- **疲劳自评** `/fatigue 1-5` — 结束 Session 时也可自评；结合预算给出温和建议
+- **疲劳自评** `/fatigue 1-5` — 越累 Token 越贵：疲劳 1–5 对应 ×1 / ×1.25 / ×2 / ×4 / ×8。进行中的 Session 按底栏当前的疲劳计；结束 Session 时可重新自评，用它给整个 Session 定价，不选则沿用底栏的值；已结束的 Session 不再变动
 
 > “模型”“Token”只是交互隐喻，不代表真实 AI 推理，也不是对脑力或疲劳的生理测量。
 

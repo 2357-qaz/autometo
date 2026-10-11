@@ -17,6 +17,7 @@ export function emptyState(now = Date.now()): AppState {
       activeGoalId: null,
       lastSeenAt: now,
       dismissedCompactId: null,
+      deviceId: Math.random().toString(36).slice(2, 10),
     },
   };
 }
@@ -34,8 +35,9 @@ export function normalize(raw: unknown): AppState {
   }
   const base = emptyState();
   // Sync bookkeeping belongs to a device, never to imported/exported data.
-  const { syncMeta: _ignored, ...rest } = raw as Record<string, unknown>;
+  const { syncMeta: _ignored, writeSeq: _seq, ...rest } = raw as Record<string, unknown>;
   void _ignored;
+  void _seq;
   const s = rest as unknown as AppState;
   const plans = s.plans.map((p) => ({ ...p, phases: p.phases ?? [], tasks: p.tasks ?? [], versions: p.versions ?? [], log: migrateLog(p.log) }));
   const goals = s.goals.map((g) => ({

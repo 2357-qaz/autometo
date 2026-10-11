@@ -1,0 +1,46 @@
+
+> automedo@0.2.0 test
+> npm test --workspaces --if-present
+
+
+> @automedo/core@0.2.0 test
+> vitest run
+
+
+ RUN  v5.0.3 /workspace/autometo-audit/packages/core
+
+
+ Test Files  4 passed (4)
+      Tests  30 passed (30)
+   Start at  00:24:43
+   Duration  653ms (transform 53%, tests 23%, import 20%, worker 4%)
+
+
+> @automedo/server@0.2.0 test
+> vitest run
+
+
+ RUN  v5.0.3 /workspace/autometo-audit/packages/server
+
+
+ Test Files  5 passed (5)
+      Tests  28 passed (28)
+   Start at  00:24:44
+   Duration  1.60s (tests 59%, import 20%, transform 19%, worker 2%)
+
+    Isolate  5 workers spawned · ~80ms startup each (spawn + environment, per file)
+             at least ~320ms faster with isolate: false — reuses workers across files instead of one per file
+
+
+> @automedo/tui@0.2.0 test
+> vitest run
+
+
+ RUN  v5.0.3 /workspace/autometo-audit/apps/tui
+
+
+ Test Files  2 passed (2)
+      Tests  8 passed (8)
+   Start at  00:24:46
+   Duration  2.99s (tests 83%, import 9%, transform 8%)
+

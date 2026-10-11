@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import { createStore, emptyState, newSyncMeta, ops, SyncClient, type Store, type SyncConfig, type SyncMeta, type SyncStorage } from '@automedo/core';
+import { createDocPersistence, createStore, newSyncMeta, ops, SyncClient, type Store, type SyncConfig, type SyncStorage } from '@automedo/core';
 import { createApp } from '../src/app';
 import { openDb } from '../src/db';
 
@@ -16,22 +16,14 @@ beforeAll(async () => {
 });
 afterAll(() => new Promise<void>((r) => server.close(() => r())));
 
-function memStorage(cfg: SyncConfig | null): SyncStorage & { meta: SyncMeta | null } {
-  let c = cfg;
-  const s = {
-    meta: null as SyncMeta | null,
-    loadConfig: () => c,
-    saveConfig: (x: SyncConfig | null) => void (c = x),
-    loadMeta: () => s.meta,
-    saveMeta: (m: SyncMeta) => void (s.meta = m),
-  };
-  return s;
-}
-
+/** A device as in the apps: one state document whose local edits get revisions. */
 function device(name: string) {
-  const store: Store = createStore(emptyState());
-  const storage = memStorage({ url, token: TOKEN });
-  storage.meta = newSyncMeta(name);
+  let doc: string | null = null;
+  let c: SyncConfig | null = { url, token: TOKEN };
+  const p = createDocPersistence({ read: () => doc, write: (t) => void (doc = t) }, () => newSyncMeta(name));
+  const store: Store = createStore(p.load().state, p.persist, 0);
+  p.attach(store);
+  const storage: SyncStorage = { loadConfig: () => c, saveConfig: (x) => void (c = x), loadMeta: p.loadMeta, updateMeta: p.updateMeta };
   const client = new SyncClient(store, storage);
   return { store, client, sync: () => client.syncNow(true), state: () => store.get() };
 }

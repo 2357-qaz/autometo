@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import type { Output } from '../ctx';
 import { useApp } from '../ctx';
 import { matchCommands, needsArg } from '@automedo/core';
-import { activeSession, latestFatigue, runSegmentsTokens, runStartedAt, TIERS, type BudgetLevel } from '@automedo/core';
+import { activeSession, fatigueMult, latestFatigue, otherSessions, runSegmentsTokens, runStartedAt, TIERS, type BudgetLevel } from '@automedo/core';
 import { currentWs } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
 import { useSyncStatus } from '../sync';
@@ -42,6 +42,26 @@ function SpinnerLine() {
       {over && <span className="yellow">已超过计划时长</span>}
       <button className="link" title="结束 Session（f）" onClick={() => run('/end')}>结束</button>
     </div>
+  );
+}
+
+/** Sessions running on other devices: shown, and endable from here if left running. */
+function OtherSessionsLine() {
+  const { state, run } = useApp();
+  const others = otherSessions(state);
+  if (!others.length) return null;
+  return (
+    <>
+      {others.map((s) => (
+        <div key={s.id} className="spinner-line other" role="status">
+          <span className="violet">✻ 另一台设备专注中</span>
+          <span className="dim">
+            ({fmtDuration(Date.now() - runStartedAt(state, s.runId))} / {s.plannedMin}m{s.intent ? ` · ${s.intent}` : ''})
+          </span>
+          <button className="link" title="在那台设备上忘了结束？在这里结束它" onClick={() => run('/end other')}>结束那边的</button>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -181,6 +201,7 @@ export const Bottom = forwardRef<PromptHandle, {
         </div>
       )}
       <SpinnerLine />
+      <OtherSessionsLine />
       {dock}
       <QuickChips show={focused && !v} mode={mode} onPick={(t) => (t.endsWith(' ') ? (setV(t), requestAnimationFrame(() => ta.current?.focus())) : submit(t))} />
       <div className="prompt-wrap">
@@ -231,11 +252,11 @@ export const Bottom = forwardRef<PromptHandle, {
         </button>
         {advice ? <span className="yellow">{advice}</span> : <button className="sl faint" onClick={() => open({ type: 'help' })}>? for shortcuts</button>}
         <span className="spacer" />
-        <button className="sl" title={`模型档位：${TIERS[state.hie.tier].hint}（点击切换）`} onClick={() => onRun('/model')}>
+        <button className="sl" title={`模型档位：${TIERS[state.hie.tier].hint}（点击选择）`} onClick={() => onRun('/model')}>
           <TierLabel tier={state.hie.tier} />
         </button>
         <span className="sep">·</span>
-        <button className="sl" title="推理强度（点击切换）" onClick={() => onRun('/effort')}>
+        <button className="sl" title="推理强度（点击选择）" onClick={() => onRun('/effort')}>
           <EffortLabel effort={state.hie.effort} />
         </button>
         <span className="sep">·</span>
@@ -247,8 +268,8 @@ export const Bottom = forwardRef<PromptHandle, {
           {budgetLevel === 'low' && ` · ${budgetLeft}% left`}
         </span>
         <span className="sep">·</span>
-        <button className={`sl ${fat && fat >= 4 ? 'yellow' : 'dim'}`} title="疲劳自评 1–5（点击填写）" onClick={() => (ta.current && (setV('/fatigue '), ta.current.focus()))}>
-          {fat ? `疲劳 ${fat}/5` : '疲劳 –'}
+        <button className={`sl ${fat && fat >= 4 ? 'yellow' : 'dim'}`} title="疲劳自评 1–5（点击填写）：越累 token 越贵，×1 / ×1.25 / ×2 / ×4 / ×8" onClick={() => onRun('/fatigue')}>
+          {fat ? `疲劳 ${fat}/5${fatigueMult(fat) > 1 ? ` ×${fatigueMult(fat)}` : ''}` : '疲劳 –'}
         </button>
         <span className="sep">·</span>
         <SyncIndicator />
@@ -266,6 +287,7 @@ function SyncIndicator() {
     : st.phase === 'syncing' ? <span className="blue">⟳ 同步中</span>
     : st.phase === 'offline' ? <span className="yellow">⚠ 离线</span>
     : st.confirm ? <span className="yellow">⏸ 同步待确认</span>
+    : st.conflicts.length ? <span className="yellow">⚠ {st.conflicts.length} 处同时编辑</span>
     : st.phase === 'error' ? <span className="red">✗ 同步失败</span>
     : <span className="dim">✓ 已同步</span>;
   const title =

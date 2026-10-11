@@ -3,10 +3,14 @@ import {
   activePlan,
   activeSession,
   currentWs,
+  describeConflict,
   describeGuard,
+  fieldLabel,
   EFFORT_ORDER,
   EFFORTS,
   FATIGUE_LABELS,
+  fatigueMult,
+  latestFatigue,
   findWs,
   generateCompact,
   ops,
@@ -107,11 +111,11 @@ export function formFor(intent: Intent, store: Store, sync: SyncClient): FormSpe
       };
     case 'session': {
       const ws = currentWs(s);
-      const active = ws ? ops.orderedTasks(ws).find((t) => t.status === 'active') : undefined;
+      const active = ws ? ops.currentTask(ws, s) : undefined;
       return {
         title: '开始专注 Session',
         color: '#d97757',
-        desc: `今天以什么档位工作？${ws ? `关联「${ws.title}」` : ''}`,
+        desc: `今天以什么档位工作？${ws ? `关联「${ws.title}」` : ''}${fatigueMult(latestFatigue(s)) > 1 ? `（疲劳 ${latestFatigue(s)}/5：token ×${fatigueMult(latestFatigue(s))}）` : ''}`,
         fields: [
           { kind: 'text', key: 'intent', label: '这次要做什么', initial: active?.title ?? (ws?.kind === 'goal' ? ws.nextAction : '') },
           { kind: 'select', key: 'tier', label: '模型档位', initial: s.hie.tier, options: TIER_ORDER.map((t) => ({ value: t, label: `${TIERS[t].label} · ${TIERS[t].rate}/min`, hint: TIERS[t].hint })) },
@@ -131,7 +135,16 @@ export function formFor(intent: Intent, store: Store, sync: SyncClient): FormSpe
         desc: `已专注 · ↑ ${runSegmentsTokens(s, cur.runId).toLocaleString()} tokens`,
         fields: [
           { kind: 'text', key: 'outcome', label: '这次推进了什么', placeholder: '一句话结果（可选）' },
-          { kind: 'select', key: 'fatigue', label: '疲劳自评', initial: '0', options: [{ value: '0', label: '跳过' }, ...[1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: `${n} ${FATIGUE_LABELS[n]}` }))] },
+          {
+            kind: 'select',
+            key: 'fatigue',
+            label: '疲劳自评（决定这次的 token 倍率）',
+            initial: '0',
+            options: [
+              { value: '0', label: (() => { const f = latestFatigue(s); return f ? `沿用底栏 · ${f}/5 ×${fatigueMult(f)}` : '跳过 · ×1'; })() },
+              ...[1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: `${n} ${FATIGUE_LABELS[n]} ×${fatigueMult(n)}` })),
+            ],
+          },
           ...(cur.wsId ? [{ kind: 'confirm' as const, key: 'compact', label: '结束后生成 Compact 快照', initial: true }] : []),
         ],
         submit: (v) => {
@@ -228,6 +241,39 @@ export function formFor(intent: Intent, store: Store, sync: SyncClient): FormSpe
     case 'sync': {
       const cfg = sync.config();
       const guard = sync.getStatus().confirm;
+      const conflicts = sync.getStatus().conflicts;
+      if (cfg && !guard && conflicts.length) {
+        const shown = conflicts.slice(-6);
+        const options = [{ value: 'dismiss', label: '知道了，全部清除', hint: '合并结果保持不变' }];
+        shown.forEach((n, i) => {
+          if (n.what === 'fields') for (const f of n.fields ?? []) {
+            const other = f.kept === 'mine' ? f.theirs : f.mine;
+            options.push({ value: `f:${i}:${f.name}`, label: `「${n.title}」${fieldLabel(f.name)}改用另一个值`, hint: String(other ?? '（空）') });
+          } else options.push({ value: `d:${i}`, label: `删除「${n.title}」`, hint: '照删除的那一方处理' });
+        });
+        options.push({ value: 'later', label: '稍后再看', hint: '' });
+        return {
+          title: '同时编辑',
+          color: '#e0c07a',
+          desc: shown.map((n) => `· ${describeConflict(n)}`).join('\n'),
+          fields: [{ kind: 'select', key: 'act', label: '怎么处理', options, initial: 'dismiss' }],
+          submit: (v) => {
+            const act = String(v.act);
+            if (act === 'later') return { text: '保留提示，随时 /sync 再看' };
+            if (act === 'dismiss') {
+              sync.dismissConflicts();
+              return { text: '已清除提示' };
+            }
+            const [k, i, field] = act.split(':');
+            const n = shown[Number(i)];
+            if (k === 'd') return { text: sync.resolveConflict(n, 'delete') };
+            const f = n.fields!.find((x) => x.name === field)!;
+            // "The other value": whichever was not kept.
+            const value = f.kept === 'mine' ? f.theirs : f.mine;
+            return { text: sync.resolveConflict({ ...n, fields: [{ ...f, mine: value }] }, { field }) };
+          },
+        };
+      }
       if (cfg && guard) {
         return {
           title: '同步已暂停',
@@ -239,7 +285,7 @@ export function formFor(intent: Intent, store: Store, sync: SyncClient): FormSpe
               key: 'act',
               label: '怎么处理',
               options: [
-                { value: 'restore', label: '从服务器恢复', hint: '找回被删的内容；同一条记录以服务器版本为准' },
+                { value: 'restore', label: '从服务器恢复', hint: '从服务器找回被删的内容，其他修改照常同步' },
                 { value: 'confirm', label: '确认删除', hint: `从服务器上删除这 ${guard.deletes} 条记录` },
                 { value: 'later', label: '稍后再说', hint: '保持暂停，数据都还在' },
               ],
@@ -249,7 +295,7 @@ export function formFor(intent: Intent, store: Store, sync: SyncClient): FormSpe
           submit: async (v) => {
             try {
               if (v.act === 'confirm') {
-                await sync.confirmDeletes();
+                if (!(await sync.confirmDeletes())) return { error: '要删除的内容和刚才显示的不一样了：esc 关闭后再 /sync 看新的列表' };
                 return { text: `已确认，服务器上删除了 ${guard.deletes} 条记录` };
               }
               if (v.act === 'restore') {

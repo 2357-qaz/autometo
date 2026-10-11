@@ -26,6 +26,9 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Reliability audit regressions
+        run: npm run audit:typecheck && npm run audit:test
+
       - name: Build web
         run: npm run build
 

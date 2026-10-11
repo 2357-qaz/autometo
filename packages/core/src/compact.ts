@@ -1,12 +1,12 @@
 // Rule-based context snapshot ("Compact"). No LLM involved.
 import type { AppState, Goal, Plan, Workspace } from './types';
-import { activeSession, sessionTokens, TIERS } from './hie';
-import { checkpointDue, currentPhase, nextCheckpointAt, orderedTasks } from './ops';
+import { activeSession, latestFatigue, sessionTokens, TIERS } from './hie';
+import { checkpointDue, currentPhase, currentTask, nextCheckpointAt, orderedTasks, otherActiveTasks } from './ops';
 import { diffPlan, diffSummary } from './diff';
 import { fmtDate, fmtTime, startOfDay } from './util';
 
 export function generateCompact(state: AppState, ws: Workspace, now = Date.now()): string {
-  const lines = ws.kind === 'plan' ? planLines(ws) : goalLines(ws, now);
+  const lines = ws.kind === 'plan' ? planLines(ws, state) : goalLines(ws, now);
   lines.push('', ...sessionLines(state, ws, now));
   const recent = ws.log.filter((l) => !['compact', 'session-start', 'session-end'].includes(l.type)).slice(-5);
   if (recent.length) {
@@ -17,7 +17,7 @@ export function generateCompact(state: AppState, ws: Workspace, now = Date.now()
   return [`# Compact · ${ws.title} · ${fmtDate(now)}`, '', ...lines].join('\n');
 }
 
-function planLines(p: Plan): string[] {
+function planLines(p: Plan, state: AppState): string[] {
   const out: string[] = [];
   out.push(`模式：Plan Mode · 状态 ${p.status}`);
   if (p.objective) out.push(`目标：${p.objective}`);
@@ -30,9 +30,10 @@ function planLines(p: Plan): string[] {
     const idx = p.phases.indexOf(ph) + 1;
     out.push(`当前阶段：${idx}/${p.phases.length}「${ph.title}」${ph.goal ? ` — ${ph.goal}` : ''}`);
   }
-  const active = tasks.find((t) => t.status === 'active');
+  const active = currentTask(p, state);
   out.push('', '## 我做到哪里');
   out.push(active ? `- 进行中：#${tasks.indexOf(active) + 1} ${active.title}${active.note ? `（${active.note}）` : ''}` : '- 没有进行中的任务');
+  for (const t of otherActiveTasks(p, state)) out.push(`- 另一台设备进行中：#${tasks.indexOf(t) + 1} ${t.title}`);
   const lastDone = tasks.filter((t) => t.status === 'done' && t.doneAt).sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)).slice(0, 3);
   for (const t of lastDone) out.push(`- 已完成：${t.title}`);
   const blocked = tasks.filter((t) => t.status === 'blocked');
@@ -79,7 +80,7 @@ function goalLines(g: Goal, now: number): string[] {
 function sessionLines(state: AppState, ws: Workspace, now: number): string[] {
   const sod = startOfDay(now);
   const mine = state.sessions.filter((s) => s.wsId === ws.id && (s.endedAt ?? now) >= sod);
-  const tokens = mine.reduce((a, s) => a + sessionTokens(s, now), 0);
+  const tokens = mine.reduce((a, s) => a + sessionTokens(s, now, latestFatigue(state, now)), 0);
   const mins = Math.round(mine.reduce((a, s) => a + ((s.endedAt ?? now) - s.startedAt), 0) / 60_000);
   const cur = activeSession(state);
   const out = ['## 今日投入（HIE）'];

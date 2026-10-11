@@ -3,11 +3,11 @@ import type { Intent as Dialog } from '@automedo/core';
 import { useApp } from '../ctx';
 import { COMMANDS } from '@automedo/core';
 import { generateCompact } from '@automedo/core';
-import { activeSession, EFFORT_ORDER, EFFORTS, estimateTokens, FATIGUE_LABELS, runSegmentsTokens, TIER_ORDER, TIERS, tokensToday } from '@automedo/core';
+import { activeSession, EFFORT_ORDER, EFFORTS, estimateTokens, FATIGUE_LABELS, fatigueMult, latestFatigue, runSegmentsTokens, TIER_ORDER, TIERS, tokensToday } from '@automedo/core';
 import { ops } from '@automedo/core';
 import { activePlan, currentWs, findWs } from '@automedo/core';
 import type { Effort, Tier, Verdict, Workspace } from '@automedo/core';
-import { describeGuard, fmtAgo, fmtDuration, fmtTokens } from '@automedo/core';
+import { describeConflict, describeGuard, fieldLabel, fmtAgo, fmtDuration, fmtTokens, pickSpec, type ConflictNote, type PickKind } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
 import { useSyncStatus } from '../sync';
 import { disablePush, enablePush, pushState, testPush, type PushState } from '../push';
@@ -108,7 +108,49 @@ export function DialogHost({ dialog }: { dialog: Dialog }) {
       return <SyncSetup />;
     case 'confirm':
       return <Confirm {...dialog} />;
+    case 'pick':
+      return <Pick what={dialog.what} />;
   }
+}
+
+/** One value out of a few (model tier, effort, fatigue): ←→ to move, Enter or a click to choose. */
+function Pick({ what }: { what: PickKind }) {
+  const { state } = useApp();
+  const spec = pickSpec(what, state);
+  const [i, setI] = useState(Math.max(0, spec.current));
+  const { err, submit } = useSubmit();
+  const choose = (k: number) => submit(spec.label, (d) => spec.apply(d, spec.options[k].value));
+  return (
+    <Shell title={spec.title} desc="←→ 选择 · Enter 确认 · Esc 取消" error={err} submitLabel="确认" onSubmit={() => choose(i)}>
+      <div
+        className="seg"
+        role="radiogroup"
+        aria-label={spec.title}
+        data-autofocus
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            e.preventDefault();
+            const n = spec.options.length;
+            setI((x) => (x + (e.key === 'ArrowLeft' ? n - 1 : 1)) % n);
+          } else if (e.key === 'Enter') {
+            e.preventDefault();
+            choose(i);
+          } else if (/^[1-9]$/.test(e.key) && Number(e.key) <= spec.options.length) {
+            choose(Number(e.key) - 1);
+          }
+        }}
+      >
+        {spec.options.map((o, k) => (
+          <button type="button" key={o.value} role="radio" aria-checked={k === i} aria-pressed={k === i} tabIndex={-1} onClick={() => choose(k)}>
+            {o.label}
+            {k === spec.current && <span className="dim"> · 当前</span>}
+            <small>{o.hint}</small>
+          </button>
+        ))}
+      </div>
+    </Shell>
+  );
 }
 
 function NewPlan({ title = '' }: { title?: string }) {
@@ -199,13 +241,14 @@ function TierPicker({ tier, setTier, effort, setEffort }: { tier: Tier; setTier:
 function StartSession({ minutes }: { minutes?: number }) {
   const { state } = useApp();
   const ws = ops.requireWsSafe(state);
-  const active = ws ? ops.orderedTasks(ws).find((t) => t.status === 'active') : undefined;
+  const active = ws ? ops.currentTask(ws, state) : undefined;
   const [tier, setTier] = useState<Tier>(state.hie.tier);
   const [effort, setEffort] = useState<Effort>(state.hie.effort);
   const [mins, setMins] = useState(String(minutes ?? 25));
   const [intent, setIntent] = useState(active?.title ?? (ws?.kind === 'goal' ? ws.nextAction : ''));
   const { err, submit } = useSubmit();
-  const est = estimateTokens(tier, effort, Number(mins) || 0);
+  const fatNow = latestFatigue(state);
+  const est = estimateTokens(tier, effort, Number(mins) || 0, fatNow);
   const used = tokensToday(state);
   const left = state.settings.dailyBudget - used;
   return (
@@ -224,6 +267,7 @@ function StartSession({ minutes }: { minutes?: number }) {
           <span>预计消耗</span>
           <div>
             ≈ <span className="accent">{fmtTokens(est)}</span> tokens
+            {fatigueMult(fatNow) > 1 && <span className="yellow"> · 疲劳 {fatNow}/5 ×{fatigueMult(fatNow)}</span>}
             <span className={est > left ? 'red' : 'dim'} style={{ marginLeft: 12 }}>今日剩余 {fmtTokens(Math.max(0, left))}{est > left ? ' · 将超出预算' : ''}</span>
           </div>
         </div>
@@ -238,7 +282,7 @@ function FatiguePicker({ v, set }: { v: number | null; set: (n: number) => void 
     <div className="seg inline" role="group" aria-label="疲劳自评">
       {[1, 2, 3, 4, 5].map((n) => (
         <button type="button" key={n} aria-pressed={v === n} onClick={() => set(n)}>
-          {n}<small>{FATIGUE_LABELS[n]}</small>
+          {n}<small>{FATIGUE_LABELS[n]} ×{fatigueMult(n)}</small>
         </button>
       ))}
     </div>
@@ -255,7 +299,8 @@ function EndSession() {
   const { open } = useApp();
   if (!s) return <Shell title="没有进行中的 Session">当前没有进行中的 Session。</Shell>;
   const runStart = state.sessions.filter((x) => x.runId === s.runId)[0]?.startedAt ?? s.startedAt;
-  const tokens = runSegmentsTokens(state, s.runId);
+  const fatNow = latestFatigue(state);
+  const tokens = runSegmentsTokens(state, s.runId, undefined, fat);
   return (
     <Shell
       title={<><span className="green">⏺</span> 结束 Session</>}
@@ -270,7 +315,10 @@ function EndSession() {
       }}
     >
       <label className="field"><span>这次推进了什么</span><input data-autofocus value={outcome} onChange={(e) => setOutcome(e.target.value)} placeholder="一句话结果（可选）" /></label>
-      <div className="field"><span>疲劳自评（可选）</span><FatiguePicker v={fat} set={setFat} /></div>
+      <div className="field">
+        <span>疲劳自评（{fatNow ? `不选则沿用底栏的 ${fatNow}/5 ×${fatigueMult(fatNow)}` : '可选，不选按 ×1 计'}；决定这次 Session 的 token 倍率）</span>
+        <FatiguePicker v={fat} set={(n) => setFat(fat === n ? null : n)} />
+      </div>
       <button type="button" className="toggle" role="checkbox" aria-checked={doCompact} disabled={!s.wsId} onClick={() => setDoCompact(!doCompact)}>
         <span className="tb">[{doCompact ? 'x' : ' '}]</span> 结束后生成 Compact 快照，方便下次 Resume
       </button>
@@ -705,10 +753,40 @@ function SyncSetup() {
         </div>
       )}
       {cfg && status.confirm && <DeleteGuardSection />}
+      {cfg && status.conflicts.length > 0 && <ConflictSection notes={status.conflicts} />}
       {cfg && <PushSection />}
       <label className="field"><span>服务器地址</span><input data-autofocus value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://automedo.example.com" spellCheck={false} autoCapitalize="off" /></label>
       <label className="field"><span>访问令牌</span><input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="AUTOMEDO_TOKEN" autoComplete="off" /></label>
     </Shell>
+  );
+}
+
+/** Concurrent edits that were merged: what happened, and a one-click way to change it. */
+function ConflictSection({ notes }: { notes: ConflictNote[] }) {
+  const { sync, say } = useApp();
+  const done = (text: string) => say({ cmd: '/sync', text, undoable: true });
+  return (
+    <div className="field">
+      <span>同时编辑（已自动合并）</span>
+      <div>
+        {notes.slice(-6).map((n) => (
+          <div key={`${n.at}:${n.id}`} style={{ marginBottom: 6 }}>
+            <span className="yellow">{describeConflict(n)}</span>
+            <div className="row-btns" style={{ marginTop: 2 }}>
+              {n.what === 'fields'
+                ? (n.fields ?? []).map((f) => (
+                    <button key={f.name} type="button" className="btn" onClick={() => done(sync.resolveConflict({ ...n, fields: [{ ...f, mine: f.kept === 'mine' ? f.theirs : f.mine }] }, { field: f.name }))}>
+                      {fieldLabel(f.name)}改用另一个
+                    </button>
+                  ))
+                : <button type="button" className="btn danger" onClick={() => done(sync.resolveConflict(n, 'delete'))}>删除它</button>}
+              <button type="button" className="btn ghost" onClick={() => sync.dismissConflicts([n])}>知道了</button>
+            </div>
+          </div>
+        ))}
+        {notes.length > 1 && <button type="button" className="btn" onClick={() => sync.dismissConflicts()}>全部知道了</button>}
+      </div>
+    </div>
   );
 }
 
@@ -736,10 +814,14 @@ function DeleteGuardSection() {
       <span>待确认</span>
       <div>
         <span className="yellow">{describeGuard(guard)}。</span>
-        <span className="dim">如果不是你删的，选「从服务器恢复」：被删的内容会回来，同一条记录以服务器版本为准。</span>
+        <span className="dim">如果不是你删的，选「从服务器恢复」：这些内容会从服务器找回，其他修改照常同步。</span>
         <div className="row-btns" style={{ marginTop: 6 }}>
           <button type="button" className="btn primary" disabled={busy} onClick={() => void run(() => sync.restoreFromServer(), '已从服务器恢复，同步继续')}>从服务器恢复</button>
-          <button type="button" className="btn danger" disabled={busy} onClick={() => void run(() => sync.confirmDeletes(), `已确认，服务器上删除了 ${guard.deletes} 条记录`)}>确认删除</button>
+          <button type="button" className="btn danger" disabled={busy} onClick={() =>
+              void run(async () => {
+                if (!(await sync.confirmDeletes())) throw new Error('要删除的内容和刚才显示的不一样了，请看一眼新的列表再确认');
+              }, `已确认，服务器上删除了 ${guard.deletes} 条记录`)
+            }>确认删除</button>
         </div>
         {err && <div className="red">{err}</div>}
       </div>

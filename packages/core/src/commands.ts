@@ -1,7 +1,7 @@
 import type { Intent } from './intents';
-import type { Store } from './store';
+import { describeUndo, type Store } from './store';
 import { activeGoal, activePlan, currentWs } from './state';
-import { activeSession, EFFORT_ORDER, TIER_ORDER } from './hie';
+import { activeSession, EFFORT_ORDER, otherSessions, TIER_ORDER } from './hie';
 import * as ops from './ops';
 import type { Effort, Tier } from './types';
 
@@ -78,8 +78,8 @@ export const COMMANDS: Command[] = [
         return `已添加 #${ops.orderedTasks(ops.requireWs(d)).findIndex((x) => x.id === t.id) + 1}：${t.title}`;
       }),
   },
-  { name: 'start', args: '[#n]', desc: '开始执行任务（同时只有一个进行中）', run: (a, c) => mut(c, '开始任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a || firstPending(d)).id, 'active')) },
-  { name: 'done', args: '[#n]', desc: '完成任务（默认当前进行中）', run: (a, c) => mut(c, '完成任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a).id, 'done')) },
+  { name: 'start', args: '[#n]', desc: '开始执行任务（同时只有一个进行中）', run: (a, c) => mut(c, '开始任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a || firstPending(d), d).id, 'active')) },
+  { name: 'done', args: '[#n]', desc: '完成任务（默认当前进行中）', run: (a, c) => mut(c, '完成任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a, d).id, 'done')) },
   { name: 'next', desc: '完成当前任务并开始下一个', run: (_, c) => mut(c, '下一个任务', (d) => ops.nextTask(d)) },
   {
     name: 'block',
@@ -87,7 +87,7 @@ export const COMMANDS: Command[] = [
     desc: '标记任务阻塞',
     run: (a, c) => {
       const m = a.trim().match(/^#?(\d+)\s*(.*)$/);
-      return mut(c, '标记阻塞', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), m ? m[1] : '').id, 'blocked', m ? m[2] : a));
+      return mut(c, '标记阻塞', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), m ? m[1] : '', d).id, 'blocked', m ? m[2] : a));
     },
   },
   {
@@ -96,10 +96,10 @@ export const COMMANDS: Command[] = [
     desc: '延期任务：推到下一阶段（Goal 中移到末尾）',
     run: (a, c) => {
       const m = a.trim().match(/^#?(\d+)\s*(.*)$/);
-      return mut(c, '延期', (d) => ops.deferTask(d, ops.resolveTask(ops.requireWs(d), m ? m[1] : '').id, m ? m[2] : a));
+      return mut(c, '延期', (d) => ops.deferTask(d, ops.resolveTask(ops.requireWs(d), m ? m[1] : '', d).id, m ? m[2] : a));
     },
   },
-  { name: 'skip', args: '[#n]', desc: '跳过任务', run: (a, c) => mut(c, '跳过任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a).id, 'skipped')) },
+  { name: 'skip', args: '[#n]', desc: '跳过任务', run: (a, c) => mut(c, '跳过任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a, d).id, 'skipped')) },
   {
     name: 'phase',
     args: '<标题> | done',
@@ -190,19 +190,24 @@ export const COMMANDS: Command[] = [
   },
   {
     name: 'end',
-    desc: '结束 Session 并自评疲劳',
-    run: (_, c) => {
-      if (!activeSession(c.store.get())) return { text: '当前没有进行中的 Session', error: true };
+    args: '[other]',
+    desc: '结束 Session 并自评疲劳（other：结束另一台设备上的）',
+    run: (a, c) => {
+      if (a.trim() === 'other') return mut(c, '结束其他设备的 Session', (d) => ops.endSession(d, { other: true }));
+      if (!activeSession(c.store.get())) {
+        const others = otherSessions(c.store.get());
+        return { text: others.length ? `这台设备上没有进行中的 Session。另一台设备上正在专注「${others[0].intent || '未命名'}」，要结束它请用 /end other` : '当前没有进行中的 Session', error: true };
+      }
       c.open({ type: 'endSession' });
     },
   },
   {
     name: 'model',
     args: '[haiku|sonnet|opus]',
-    desc: '切换模型档位（不带参数则轮换）',
+    desc: '切换模型档位（不带参数则弹出选择）',
     run: (a, c) => {
-      const s = c.store.get();
-      const t = (a.trim().toLowerCase() || TIER_ORDER[(TIER_ORDER.indexOf(s.hie.tier) + 1) % 3]) as Tier;
+      if (!a.trim()) return void c.open({ type: 'pick', what: 'tier' });
+      const t = a.trim().toLowerCase() as Tier;
       if (!TIER_ORDER.includes(t)) return { text: `未知档位「${a}」。可选：haiku / sonnet / opus`, error: true };
       return mut(c, '切换档位', (d) => ops.setTier(d, t));
     },
@@ -210,15 +215,20 @@ export const COMMANDS: Command[] = [
   {
     name: 'effort',
     args: '[low|medium|high]',
-    desc: '切换推理强度（不带参数则轮换）',
+    desc: '切换推理强度（不带参数则弹出选择）',
     run: (a, c) => {
-      const s = c.store.get();
-      const e = (a.trim().toLowerCase() || EFFORT_ORDER[(EFFORT_ORDER.indexOf(s.hie.effort) + 1) % 3]) as Effort;
+      if (!a.trim()) return void c.open({ type: 'pick', what: 'effort' });
+      const e = a.trim().toLowerCase() as Effort;
       if (!EFFORT_ORDER.includes(e)) return { text: `未知强度「${a}」。可选：low / medium / high`, error: true };
       return mut(c, '切换强度', (d) => ops.setEffort(d, e));
     },
   },
-  { name: 'fatigue', args: '<1-5>', desc: '疲劳自评（1 精力充沛 · 5 需要休息）', run: (a, c) => mut(c, '疲劳自评', (d) => ops.markFatigue(d, Number(a))) },
+  {
+    name: 'fatigue',
+    args: '[1-5]',
+    desc: '疲劳自评（1 精力充沛 · 5 需要休息；越累 token 越贵；不带参数则弹出选择）',
+    run: (a, c) => (a.trim() ? mut(c, '疲劳自评', (d) => ops.markFatigue(d, Number(a))) : void c.open({ type: 'pick', what: 'fatigue' })),
+  },
   { name: 'budget', args: '<数量>', desc: '设置每日 Token 预算，如 /budget 150k', run: (a, c) => mut(c, '设置预算', (d) => ops.setBudget(d, ops.parseTokenAmount(a))) },
   {
     name: 'compact',
@@ -268,7 +278,14 @@ export const COMMANDS: Command[] = [
       });
     },
   },
-  { name: 'undo', desc: '撤销上一步（Ctrl+Z）', run: (_, c) => { const l = c.store.undo(); return l ? ok(`已撤销：${l}`, false) : { text: '没有可撤销的操作', error: true }; } },
+  {
+    name: 'undo',
+    desc: '撤销上一步（Ctrl+Z）',
+    run: (_, c) => {
+      const r = describeUndo(c.store.undo());
+      return r.error ? { text: r.text, error: true } : ok(r.text, false);
+    },
+  },
   { name: 'sync', desc: '连接自托管服务器，在多台设备间同步', run: (_, c) => void c.open({ type: 'sync' }) },
   { name: 'export', desc: '导出 JSON 备份', run: (_, c) => { c.exportData(); return ok('已导出备份文件', false); } },
   { name: 'import', desc: '从 JSON 备份导入（会覆盖当前数据）', run: (_, c) => void c.importData() },
