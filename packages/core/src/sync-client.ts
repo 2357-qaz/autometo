@@ -396,6 +396,18 @@ export class SyncClient {
     const known = new Set((out.meta.conflicts ?? []).map((n) => `${n.at}:${n.id}`));
     const conflicts = [...(out.meta.conflicts ?? []), ...planned.filter((n) => !known.has(`${n.at}:${n.id}`))].slice(-50);
     this.commit({ ...out, meta: { ...out.meta, synced: true, conflicts } });
+    // Refused changes were merged here: send the merge right away, like a normal round does,
+    // so one sync settles it. The reconciliation itself is already committed, so a failure
+    // now is not a failed connect: what is left stays pending and is retried as usual.
+    if (res.rejected?.length && outboxSize(this.storage.loadMeta())) {
+      try {
+        await this.normalRound(cfg);
+      } catch (e) {
+        const err = e as SyncError;
+        this.set({ phase: err.kind === 'network' ? 'offline' : 'error', error: err.message, confirm: err.guard ?? null, pending: outboxSize(this.storage.loadMeta()) });
+        this.schedule();
+      }
+    }
   }
 
   private async normalRound(cfg: SyncConfig): Promise<void> {

@@ -136,7 +136,8 @@ describe('a full reconciliation whose upload is partly refused', () => {
     b.store.mutate('b', (d) => void ops.updateTask(d, tid, { title: 'title from B' }));
     await b.client.connect((b.client.config())!); // full reconcile; A writes in between
     if (when === 'between pull and push') expect(refused()).toContain('conflict'); // the refusal path was taken
-    await b.sync();
+    // Settled within the connect itself: nothing left waiting for a later sync.
+    expect(b.client.getStatus().pending).toBe(0);
     await a.sync();
     for (const dev of [a, b]) {
       const t = dev.state().plans.find((p) => p.title === 'P')!.tasks[0];
@@ -155,8 +156,9 @@ describe('a full reconciliation whose upload is partly refused', () => {
       ops.addTask(d, 'added on B');
     });
     await b.client.connect((b.client.config())!);
-    if (when === 'between pull and push') expect(refused()).toContain('parent-deleted');
-    await b.sync();
+    if (when === 'between pull and push') expect(refused()).toContain('parent-deleted'); // the refusal path was taken
+    // Settled within the connect itself: nothing left waiting for a later sync.
+    expect(b.client.getStatus().pending).toBe(0);
     await a.sync();
     expect(titles(b.state(), 'P')).toContain('added on B');
     expect(titles(a.state(), 'P')).toContain('added on B'); // on the server too, not a local orphan
@@ -174,11 +176,52 @@ describe('a full reconciliation whose upload is partly refused', () => {
     });
     b.store.mutate('del', (d) => void ops.deleteWs(d, d.plans.find((p) => p.title === 'P')!.id));
     await b.client.connect((b.client.config())!);
-    if (when === 'between pull and push') expect(refused()).toContain('has-children');
-    await b.sync();
+    if (when === 'between pull and push') expect(refused()).toContain('has-children'); // the refusal path was taken
+    // Settled within the connect itself: nothing left waiting for a later sync.
+    expect(b.client.getStatus().pending).toBe(0);
     await a.sync();
     expect(titles(b.state(), 'P')).toEqual(['added on A']);
     expect(titles(a.state(), 'P')).toEqual(['added on A']);
     expect(b.client.getStatus().conflicts.some((n) => n.what === 'kept-workspace')).toBe(true);
+  });
+
+  it('if sending the merge right away fails, the connect still succeeds and it goes out later', async () => {
+    const cfg = await server();
+    const a = device(cfg);
+    a.store.mutate('x', (d) => {
+      ops.createPlan(d, 'P');
+      ops.addTask(d, 'original');
+    });
+    await a.sync();
+    let posts = 0;
+    let armed = false;
+    const b = device(cfg, {
+      fetchImpl: async (input, init) => {
+        if (armed && String(input).endsWith('/v1/sync')) {
+          posts++;
+          if (posts === 2) {
+            // Between B's pull and push, A edits the same task.
+            a.store.mutate('a', (d) => void ops.updateTask(d, d.plans[0].tasks[0].id, { note: 'note from A' }));
+            await a.sync();
+          }
+          if (posts === 3) throw new TypeError('network dropped'); // the immediate resend
+        }
+        return fetch(input, init);
+      },
+    });
+    await b.sync();
+    b.store.mutate('b', (d) => void ops.updateTask(d, d.plans[0].tasks[0].id, { title: 'title from B' }));
+    armed = true;
+    await b.client.connect(cfg); // must not fail: the reconciliation was committed
+    expect(b.client.config()).toEqual(cfg);
+    expect(b.client.getStatus().pending).toBeGreaterThan(0);
+    const t = b.state().plans[0].tasks[0];
+    expect([t.title, t.note]).toEqual(['title from B', 'note from A']); // merged locally already
+    armed = false;
+    await b.sync();
+    await a.sync();
+    const ta = a.state().plans[0].tasks[0];
+    expect([ta.title, ta.note]).toEqual(['title from B', 'note from A']);
+    b.client.stop();
   });
 });
