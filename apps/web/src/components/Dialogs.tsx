@@ -7,7 +7,7 @@ import { activeSession, EFFORT_ORDER, EFFORTS, estimateTokens, FATIGUE_LABELS, f
 import { ops } from '@automedo/core';
 import { activePlan, currentWs, findWs } from '@automedo/core';
 import type { Effort, Tier, Verdict, Workspace } from '@automedo/core';
-import { describeGuard, fmtAgo, fmtDuration, fmtTokens, pickSpec, type PickKind } from '@automedo/core';
+import { describeConflict, describeGuard, fieldLabel, fmtAgo, fmtDuration, fmtTokens, pickSpec, type ConflictNote, type PickKind } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
 import { useSyncStatus } from '../sync';
 import { disablePush, enablePush, pushState, testPush, type PushState } from '../push';
@@ -753,10 +753,40 @@ function SyncSetup() {
         </div>
       )}
       {cfg && status.confirm && <DeleteGuardSection />}
+      {cfg && status.conflicts.length > 0 && <ConflictSection notes={status.conflicts} />}
       {cfg && <PushSection />}
       <label className="field"><span>服务器地址</span><input data-autofocus value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://automedo.example.com" spellCheck={false} autoCapitalize="off" /></label>
       <label className="field"><span>访问令牌</span><input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="AUTOMEDO_TOKEN" autoComplete="off" /></label>
     </Shell>
+  );
+}
+
+/** Concurrent edits that were merged: what happened, and a one-click way to change it. */
+function ConflictSection({ notes }: { notes: ConflictNote[] }) {
+  const { sync, say } = useApp();
+  const done = (text: string) => say({ cmd: '/sync', text, undoable: true });
+  return (
+    <div className="field">
+      <span>同时编辑（已自动合并）</span>
+      <div>
+        {notes.slice(-6).map((n) => (
+          <div key={`${n.at}:${n.id}`} style={{ marginBottom: 6 }}>
+            <span className="yellow">{describeConflict(n)}</span>
+            <div className="row-btns" style={{ marginTop: 2 }}>
+              {n.what === 'fields'
+                ? (n.fields ?? []).map((f) => (
+                    <button key={f.name} type="button" className="btn" onClick={() => done(sync.resolveConflict({ ...n, fields: [{ ...f, mine: f.kept === 'mine' ? f.theirs : f.mine }] }, { field: f.name }))}>
+                      {fieldLabel(f.name)}改用另一个
+                    </button>
+                  ))
+                : <button type="button" className="btn danger" onClick={() => done(sync.resolveConflict(n, 'delete'))}>删除它</button>}
+              <button type="button" className="btn ghost" onClick={() => sync.dismissConflicts([n])}>知道了</button>
+            </div>
+          </div>
+        ))}
+        {notes.length > 1 && <button type="button" className="btn" onClick={() => sync.dismissConflicts()}>全部知道了</button>}
+      </div>
+    </div>
   );
 }
 

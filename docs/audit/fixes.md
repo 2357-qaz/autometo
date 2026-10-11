@@ -34,3 +34,12 @@
 - 网页在 `pagehide` / 页面隐藏时也写盘（iOS 后台被杀）。
 - 本地数据损坏且备份失败时停用保存，不覆盖原数据，并如实提示。
 - 服务器专注超时提醒覆盖所有设备上进行中的 Session。
+
+## 第二轮：报告里的潜在风险
+
+| 风险 | 处理 | 主要测试 |
+|---|---|---|
+| 断电耐久性 | TUI 写入 fsync 文件与目录；SQLite `synchronous = FULL` | server `history.test.ts`（durability settings）；审计崩溃测试 |
+| 重试活性 | 请求超时（即使底层 fetch 不理会中断）；失败后指数退避重试 | server `concurrent.test.ts`（hung request）；core `retry.test.ts` |
+| 同记录并发编辑 | 乐观并发（`base` 版本）+ 字段级三方合并 + 「同时编辑」提示与一键改用；删除 vs 修改保留修改 | core `sync.test.ts`（applying a response）；server `concurrent.test.ts` |
+| 孤儿内容 | 服务器拒绝 has-children / parent-deleted；客户端保留计划并提示 | core `sync.test.ts`；server `concurrent.test.ts` |

@@ -1,7 +1,8 @@
 // Sync client shared by web and TUI: talks to the AuTomeDo server over HTTP.
 import type { Store } from './store';
 import type { AppState } from './types';
-import { applyResponse, newSyncMeta, prepareSync, reconcile, type DeleteGuard, type SyncMeta, type SyncRecord, type SyncRequest, type SyncResponse } from './sync';
+import { applyResponse, newSyncMeta, prepareSync, reconcile, withRecord, type ConflictNote, type DeleteGuard, type SyncMeta, type SyncRecord, type SyncRequest, type SyncResponse } from './sync';
+import * as ops from './ops';
 
 export interface SyncConfig {
   url: string; // e.g. https://automedo.example.com
@@ -31,6 +32,8 @@ export interface SyncStatus {
   pending: number;
   /** Sync is paused: the server wants confirmation before this mass deletion. */
   confirm: DeleteGuard | null;
+  /** Concurrent edits that were merged and are waiting for the user to look at them. */
+  conflicts: ConflictNote[];
 }
 
 export class SyncError extends Error {
@@ -52,29 +55,72 @@ export function describeGuard(g: DeleteGuard): string {
 
 const normUrl = (u: string) => u.replace(/\/+$/, '');
 
+const FIELD_LABEL: Record<string, string> = {
+  title: '标题', note: '备注', status: '状态', phaseId: '所属阶段', parent: '所属计划', objective: '目标', goal: '阶段目标', due: '目标日期',
+  nextAction: '下一步', why: '为什么', doneWhen: '完成标准', cadenceDays: 'Checkpoint 周期', dailyBudget: '每日预算', tier: '模型档位', effort: '推理强度', activeBy: '进行中的设备',
+};
+export const fieldLabel = (name: string) => FIELD_LABEL[name] ?? name;
+const short = (v: unknown) => {
+  const s = v === undefined || v === null || v === '' ? '（空）' : typeof v === 'string' ? v : JSON.stringify(v);
+  return s.length > 24 ? `${s.slice(0, 23)}…` : s;
+};
+
+/** One line for the UI about a merged concurrent edit. */
+export function describeConflict(n: ConflictNote): string {
+  switch (n.what) {
+    case 'fields':
+      return (n.fields ?? [])
+        .map((f) => `「${n.title}」的${fieldLabel(f.name)}两边同时改了：保留了${f.kept === 'mine' ? '这台设备' : '另一台设备'}的「${short(f.kept === 'mine' ? f.mine : f.theirs)}」，另一个是「${short(f.kept === 'mine' ? f.theirs : f.mine)}」`)
+        .join('；');
+    case 'kept-edited':
+      return `「${n.title}」在另一台设备上被删除了，但这台设备改过它，已保留`;
+    case 'kept-deleted':
+      return `你删除的「${n.title}」在另一台设备上被修改了，已保留`;
+    case 'kept-workspace':
+      return `「${n.title}」在一台设备上被删除，但另一台设备往里加了新内容，已保留`;
+  }
+}
+
+/** Request timeouts (ms): a request that hangs must not block syncing forever. */
+export const TIMEOUTS = { check: 10_000, sync: 30_000 };
+
+/**
+ * fetch with a deadline. The deadline holds even if the transport ignores the abort
+ * signal: the late answer is simply dropped (the server side is idempotent).
+ */
+async function timedFetch(fetchImpl: typeof fetch, url: string, init: RequestInit, ms: number): Promise<Response> {
+  const ctl = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      ctl.abort();
+      reject(new SyncError(`服务器 ${Math.round(ms / 1000)} 秒没有响应`, 'network'));
+    }, ms);
+  });
+  try {
+    return await Promise.race([fetchImpl(url, { ...init, signal: ctl.signal }), deadline]);
+  } catch (e) {
+    if (e instanceof SyncError) throw e;
+    throw new SyncError(`连不上服务器：${(e as Error).message}`, 'network');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Authenticated no-op request: proves the URL and token without changing anything. */
 export async function checkServer(cfg: SyncConfig, fetchImpl: typeof fetch = fetch): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetchImpl(`${normUrl(cfg.url)}/v1/stats`, { headers: { authorization: `Bearer ${cfg.token}` } });
-  } catch (e) {
-    throw new SyncError(`连不上服务器：${(e as Error).message}`, 'network');
-  }
+  const res = await timedFetch(fetchImpl, `${normUrl(cfg.url)}/v1/stats`, { headers: { authorization: `Bearer ${cfg.token}` } }, TIMEOUTS.check);
   if (res.status === 401) throw new SyncError('访问令牌不正确', 'auth');
   if (!res.ok) throw new SyncError(`服务器错误 ${res.status}`, 'server');
 }
 
 export async function callSync(cfg: SyncConfig, body: SyncRequest, fetchImpl: typeof fetch = fetch): Promise<SyncResponse> {
-  let res: Response;
-  try {
-    res = await fetchImpl(`${cfg.url.replace(/\/+$/, '')}/v1/sync`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.token}` },
-      body: JSON.stringify(body),
-    });
-  } catch (e) {
-    throw new SyncError(`连不上服务器：${(e as Error).message}`, 'network');
-  }
+  const res = await timedFetch(
+    fetchImpl,
+    `${normUrl(cfg.url)}/v1/sync`,
+    { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.token}` }, body: JSON.stringify(body) },
+    TIMEOUTS.sync,
+  );
   if (res.status === 401) throw new SyncError('访问令牌不正确', 'auth');
   if (res.status === 409) {
     const g = (await res.json().catch(() => null)) as DeleteGuard | null;
@@ -99,7 +145,10 @@ export interface SyncClientOptions {
 const outboxSize = (m: SyncMeta | null) => (m ? Object.keys(m.outbox).length : 0);
 
 export class SyncClient {
-  private status: SyncStatus = { phase: 'off', lastSyncAt: null, error: null, pending: 0, confirm: null };
+  private status: SyncStatus = { phase: 'off', lastSyncAt: null, error: null, pending: 0, confirm: null, conflicts: [] };
+  /** Consecutive failed rounds, for retry backoff. */
+  private failures = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
   /** Set while running a round the user confirmed: exactly the deletions they were shown. */
   private allowDeleteIds: string[] | undefined;
   private listeners = new Set<() => void>();
@@ -111,6 +160,7 @@ export class SyncClient {
 
   constructor(private store: Store, private storage: SyncStorage, private opts: SyncClientOptions = {}) {
     this.status.pending = outboxSize(storage.loadMeta());
+    this.status.conflicts = storage.loadMeta()?.conflicts ?? [];
   }
 
   getStatus(): SyncStatus {
@@ -150,7 +200,8 @@ export class SyncClient {
     this.unsub = null;
     if (this.interval) clearInterval(this.interval);
     if (this.timer) clearTimeout(this.timer);
-    this.interval = this.timer = null;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.interval = this.timer = this.retryTimer = null;
   }
 
   /**
@@ -257,6 +308,40 @@ export class SyncClient {
     await this.syncNow(true);
   }
 
+  /** The user has seen these conflict notes (all, if none given). */
+  dismissConflicts(notes?: ConflictNote[]) {
+    const drop = notes ? new Set(notes.map((n) => `${n.at}:${n.id}`)) : null;
+    this.storage.updateMeta((m) => ({ ...m, conflicts: drop ? (m.conflicts ?? []).filter((n) => !drop.has(`${n.at}:${n.id}`)) : [] }));
+    this.set({ conflicts: this.storage.loadMeta()?.conflicts ?? [] });
+  }
+
+  /**
+   * Act on a conflict note: put this device's value of a field back ("use mine"), or
+   * delete what was kept. A normal, undoable local edit that syncs like any other.
+   */
+  resolveConflict(note: ConflictNote, action: { field: string } | 'delete'): string {
+    const label = action === 'delete' ? `删除「${note.title}」` : `采用这台设备的「${action.field}」`;
+    this.store.mutate(label, (d) => {
+      if (action === 'delete' && (note.kind === 'plan' || note.kind === 'goal')) {
+        ops.deleteWs(d, note.id.slice(note.id.indexOf(':') + 1));
+        return;
+      }
+      const next = withRecord(d, note.id, (r) => {
+        if (action === 'delete' || !r) return action === 'delete' ? undefined : r;
+        const f = note.fields?.find((x) => x.name === action.field);
+        if (!f) return r;
+        if (f.name === 'parent') return { ...r, parent: f.mine as string | undefined };
+        const data = { ...(r.data as Record<string, unknown>) };
+        if (f.mine === undefined) delete data[f.name];
+        else data[f.name] = f.mine;
+        return { ...r, data };
+      });
+      Object.assign(d, next);
+    });
+    if (action === 'delete' || (note.fields ?? []).length <= 1) this.dismissConflicts([note]);
+    return label;
+  }
+
   private applyRemote(next: AppState) {
     (this.opts.applyState ?? ((st, n) => st.applyExternal(n)))(this.store, next);
   }
@@ -277,8 +362,9 @@ export class SyncClient {
     if (out.changed) this.applyRemote(out.state);
     this.storage.updateMeta(() => out.meta);
     const pending = outboxSize(out.meta);
-    this.set({ phase: 'idle', lastSyncAt: Date.now(), error: null, pending, confirm: null });
-    if (pending) this.schedule(); // edits made while we were talking to the server
+    this.failures = 0;
+    this.set({ phase: 'idle', lastSyncAt: Date.now(), error: null, pending, confirm: null, conflicts: out.meta.conflicts ?? [] });
+    if (pending) this.schedule(); // edits made meanwhile, or merges to send back
   }
 
   /** Reconcile everything with the server (first contact, another server, history reset). */
@@ -305,13 +391,19 @@ export class SyncClient {
   }
 
   private async normalRound(cfg: SyncConfig): Promise<void> {
-    const meta = this.metaFor(cfg);
-    const prepared = prepareSync(this.store.get(), meta);
-    this.set({ phase: 'syncing', pending: prepared.request.changes.length });
-    const res = await callSync(cfg, this.request(prepared.request), this.opts.fetchImpl);
-    // The server no longer knows our position (e.g. its database was restored).
-    if (res.reset) return this.fullSync(cfg);
-    this.commit(applyResponse(this.store.get(), this.metaFor(cfg), prepared.sent, res));
+    // Changes the server refused (edited elsewhere meanwhile) are merged here and sent
+    // again right away, so one sync settles a conflict. Bounded, in case of a race.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const meta = this.metaFor(cfg);
+      const prepared = prepareSync(this.store.get(), meta);
+      this.set({ phase: 'syncing', pending: prepared.request.changes.length });
+      const res = await callSync(cfg, this.request(prepared.request), this.opts.fetchImpl);
+      // The server no longer knows our position (e.g. its database was restored).
+      if (res.reset) return this.fullSync(cfg);
+      const out = applyResponse(this.store.get(), this.metaFor(cfg), prepared.request.changes, res);
+      this.commit(out);
+      if (!res.rejected?.length || !Object.keys(out.meta.outbox).length) return;
+    }
   }
 
   private async round(throwOnError: boolean) {
@@ -323,6 +415,13 @@ export class SyncClient {
     } catch (e) {
       const err = e as SyncError;
       this.set({ phase: err.kind === 'network' ? 'offline' : 'error', error: err.message, confirm: err.guard ?? null, pending: outboxSize(this.storage.loadMeta()) });
+      // Transient failures retry with backoff (2 s … 5 min); a wrong token or a paused
+      // deletion waits for the user instead.
+      if ((err.kind === 'network' || err.kind === 'server') && this.unsub) {
+        this.failures += 1;
+        if (this.retryTimer) clearTimeout(this.retryTimer);
+        this.retryTimer = setTimeout(() => void this.syncNow(), Math.min(300_000, 2000 * 2 ** (this.failures - 1)));
+      }
       if (throwOnError) throw e;
     }
   }

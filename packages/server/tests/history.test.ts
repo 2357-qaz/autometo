@@ -55,6 +55,14 @@ async function seeded() {
 }
 const editTask = (d: ReturnType<typeof device>, title: string) => d.store.mutate('edit', (s) => void ops.updateTask(s, s.plans[0].tasks[0].id, { title }));
 
+describe('durability settings', () => {
+  it('commits are fully synced to disk (survive a power cut, not just a crash)', () => {
+    const db = openDb(':memory:');
+    expect((db.raw.prepare('PRAGMA synchronous').get() as { synchronous: number }).synchronous).toBe(2); // FULL
+    db.close();
+  });
+});
+
 describe('server history going back', () => {
   it('a whole-database restore is detected and the acknowledged edit is re-sent', async () => {
     const { srv, a } = await seeded();

@@ -9,4 +9,10 @@ fs.writeFileSync = function(path, ...args) {
   if (String(path).startsWith(join(home, 'state.json.'))) throw Object.assign(new Error('injected ENOSPC'), { code: 'ENOSPC' });
   return write.call(this, path, ...args);
 };
+// The TUI now writes with openSync + writeSync + fsync (power-cut durability): inject there too.
+const open = fs.openSync;
+fs.openSync = function(path, ...args) {
+  if (String(path).startsWith(join(home, 'state.json.')) && !String(path).endsWith('.lock')) throw Object.assign(new Error('injected ENOSPC'), { code: 'ENOSPC' });
+  return open.call(this, path, ...args);
+};
 syncBuiltinESMExports();

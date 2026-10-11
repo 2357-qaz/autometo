@@ -103,33 +103,81 @@ describe('applying a response', () => {
     d.update((m) => ({ ...m, synced: true }));
     const p1 = prepareSync(d.store.get(), d.meta());
     d.store.mutate('in flight', (s) => void ops.addTask(s, 'later')); // while the request is out
-    const out = applyResponse(d.store.get(), d.meta(), p1.sent, { cursor: 5, records: [] });
+    const out = applyResponse(d.store.get(), d.meta(), p1.request.changes, { cursor: 5, records: [] });
     const left = Object.keys(out.meta.outbox);
     expect(left.length).toBeGreaterThan(0);
     expect(left.every((id) => !(id in p1.sent) || out.meta.outbox[id] !== p1.sent[id])).toBe(true);
     expect(out.meta.cursor).toBe(5);
   });
 
-  it('a newer remote version wins; an older one never overwrites a newer pending edit', () => {
+  /** A synced task, then a local edit of it: returns what is needed to fake the server. */
+  function syncedTask() {
     const d = device();
     let tid = '';
     d.store.mutate('x', (s) => {
       ops.createPlan(s, 'P');
-      tid = ops.addTask(s, 'mine').id;
+      tid = ops.addTask(s, 'original').id;
     });
-    d.update((m) => ({ ...m, synced: true }));
     const id = `task:${tid}`;
-    const rec = decompose(d.store.get()).get(id)!;
-    const mine = d.meta().outbox[id];
-    const older = { id, kind: rec.kind, parent: rec.parent, rev: makeRev(1, 'other'), data: { ...(rec.data as object), title: 'old remote' } };
-    const keep = applyResponse(d.store.get(), d.meta(), {}, { cursor: 1, records: [older] });
-    expect(keep.state.plans[0].tasks[0].title).toBe('mine');
-    expect(keep.meta.outbox[id]).toBe(mine);
-    const newer = { ...older, rev: makeRev(revTime(mine) + 1000, 'other'), data: { ...(rec.data as object), title: 'new remote' } };
-    const take = applyResponse(d.store.get(), d.meta(), {}, { cursor: 2, records: [newer] });
-    expect(take.state.plans[0].tasks[0].title).toBe('new remote');
-    expect(take.meta.outbox[id]).toBeUndefined();
-    expect(take.meta.revs[id]).toBe(newer.rev);
+    // Pretend everything was acknowledged at the current revisions.
+    d.update((m) => ({ ...m, synced: true, outbox: {}, bases: {} }));
+    const baseRec = decompose(d.store.get()).get(id)!;
+    const baseRev = d.meta().revs[id];
+    const remote = (patch: object, t: number) => ({ id, kind: baseRec.kind, parent: baseRec.parent, rev: makeRev(t, 'other'), data: { ...(baseRec.data as object), ...patch } });
+    return { d, id, tid, baseRev, remote };
+  }
+
+  it('edits of different fields on two devices are both kept', () => {
+    const { d, id, tid, remote } = syncedTask();
+    d.store.mutate('note', (s) => void ops.updateTask(s, tid, { note: 'mine' }));
+    const theirs = remote({ title: 'renamed elsewhere' }, revTime(d.meta().outbox[id]) + 10);
+    const out = applyResponse(d.store.get(), d.meta(), [], { cursor: 2, records: [theirs], rejected: [{ id, reason: 'conflict' }] });
+    const t = out.state.plans[0].tasks[0];
+    expect([t.title, t.note]).toEqual(['renamed elsewhere', 'mine']);
+    expect(out.meta.outbox[id]).toBeTruthy(); // the merge goes back to the server…
+    expect(out.meta.bases![id].rev).toBe(theirs.rev); // …on top of their version
+    expect(out.meta.conflicts).toEqual([]); // nothing to tell: no field was lost
+  });
+
+  it('the same field edited on both: the later edit is kept and the other value is reported', () => {
+    const { d, id, tid, remote } = syncedTask();
+    d.store.mutate('rename', (s) => void ops.updateTask(s, tid, { title: 'mine (earlier)' }));
+    const theirs = remote({ title: 'theirs (later)' }, revTime(d.meta().outbox[id]) + 10);
+    const out = applyResponse(d.store.get(), d.meta(), [], { cursor: 2, records: [theirs], rejected: [{ id, reason: 'conflict' }] });
+    expect(out.state.plans[0].tasks[0].title).toBe('theirs (later)');
+    expect(out.meta.outbox[id]).toBeUndefined(); // theirs as is: nothing to send
+    expect(out.meta.conflicts?.[0]).toMatchObject({ id, what: 'fields', fields: [{ name: 'title', mine: 'mine (earlier)', theirs: 'theirs (later)', kept: 'theirs' }] });
+  });
+
+  it('deleted here but edited elsewhere: the edit is kept, and said so', () => {
+    const { d, id, tid, remote } = syncedTask();
+    d.store.mutate('del', (s) => void ops.deleteTask(s, tid));
+    const theirs = remote({ title: 'still needed' }, revTime(d.meta().outbox[id]) + 10);
+    const out = applyResponse(d.store.get(), d.meta(), [], { cursor: 2, records: [theirs], rejected: [{ id, reason: 'conflict' }] });
+    expect(out.state.plans[0].tasks.map((t) => t.title)).toEqual(['still needed']);
+    expect(out.meta.conflicts?.[0]).toMatchObject({ id, what: 'kept-deleted' });
+  });
+
+  it('edited here but deleted elsewhere: the edit is kept and resent, and said so', () => {
+    const { d, id, tid } = syncedTask();
+    d.store.mutate('edit', (s) => void ops.updateTask(s, tid, { title: 'my edit' }));
+    const tomb = { id, kind: 'task' as const, rev: makeRev(revTime(d.meta().outbox[id]) + 10, 'other'), deleted: true };
+    const out = applyResponse(d.store.get(), d.meta(), [], { cursor: 2, records: [tomb], rejected: [{ id, reason: 'conflict' }] });
+    expect(out.state.plans[0].tasks.map((t) => t.title)).toEqual(['my edit']);
+    expect(out.meta.outbox[id]).toBeTruthy();
+    expect(out.meta.bases![id].rev).toBe(tomb.rev);
+    expect(out.meta.conflicts?.[0]).toMatchObject({ what: 'kept-edited' });
+  });
+
+  it('a plan deleted elsewhere while this device added to it is kept (no invisible orphans)', () => {
+    const { d } = syncedTask();
+    d.store.mutate('add', (s) => void ops.addTask(s, 'new here'));
+    const planId = `plan:${d.store.get().plans[0].id}`;
+    const tomb = { id: planId, kind: 'plan' as const, rev: makeRev(Date.now() + 100, 'other'), deleted: true };
+    const out = applyResponse(d.store.get(), d.meta(), [], { cursor: 2, records: [tomb] });
+    expect(out.state.plans[0].tasks.map((t) => t.title)).toContain('new here');
+    expect(out.meta.outbox[planId]).toBeTruthy(); // the plan goes back to the server
+    expect(out.meta.conflicts?.[0]).toMatchObject({ id: planId, what: 'kept-workspace' });
   });
 });
 

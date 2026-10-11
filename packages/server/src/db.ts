@@ -1,6 +1,6 @@
 // Record store on SQLite (node:sqlite, no native build step).
 import { DatabaseSync } from 'node:sqlite';
-import type { DeleteGuard, SyncRecord, SyncRequest, SyncResponse } from '@automedo/core';
+import type { DeleteGuard, Rejection, SyncRecord, SyncRequest, SyncResponse } from '@automedo/core';
 
 /** Thrown (before anything is written) when a sync would delete a lot and wasn't confirmed. */
 export class MassDeleteError extends Error {
@@ -25,7 +25,8 @@ export function openDb(path: string): RecordDb {
   const db = new DatabaseSync(path);
   db.exec(`
     PRAGMA journal_mode = WAL;
-    PRAGMA synchronous = NORMAL;
+    -- FULL: a sync the client was told succeeded survives a power cut, not just a crash.
+    PRAGMA synchronous = FULL;
     CREATE TABLE IF NOT EXISTS records (
       id      TEXT PRIMARY KEY,
       kind    TEXT NOT NULL,
@@ -42,6 +43,8 @@ export function openDb(path: string): RecordDb {
     CREATE TABLE IF NOT EXISTS journal (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, rev TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
     INSERT OR IGNORE INTO journal (seq, id, rev) SELECT seq, id, rev FROM records;
+    CREATE INDEX IF NOT EXISTS journal_id ON journal(id, rev);
+    CREATE INDEX IF NOT EXISTS records_parent ON records(parent);
   `);
   // Identity of this database (a new, empty one gets a new epoch).
   const epochRow = db.prepare("SELECT v FROM meta WHERE k = 'epoch'").get() as { v: string } | undefined;
@@ -49,6 +52,8 @@ export function openDb(path: string): RecordDb {
   if (!epochRow) db.prepare("INSERT INTO meta (k, v) VALUES ('epoch', ?)").run(epoch);
   const journalAt = db.prepare('SELECT rev FROM journal WHERE seq = ?');
   const journal = db.prepare('INSERT OR REPLACE INTO journal (seq, id, rev) VALUES (?, ?, ?)');
+  const everApplied = db.prepare('SELECT 1 AS x FROM journal WHERE id = ? AND rev = ? LIMIT 1');
+  const liveChildren = db.prepare('SELECT * FROM records WHERE parent = ? AND deleted = 0');
   const get = db.prepare('SELECT * FROM records WHERE id = ?');
   const upsert = db.prepare(`
     INSERT INTO records (id, kind, parent, rev, seq, deleted, data, client) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -78,6 +83,25 @@ export function openDb(path: string): RecordDb {
     ...(r.deleted ? { deleted: true } : { data: JSON.parse(r.data ?? 'null') }),
   });
 
+  const isWs = (k: string) => k === 'plan' || k === 'goal';
+  /**
+   * Whether a change applies. With a `base` (current clients) an edit applies only on
+   * top of exactly the revision it started from, so nobody's edit is silently replaced:
+   * the client gets the current version back and merges. Without one, last writer wins.
+   */
+  function decide(c: SyncRecord, cur: Row | undefined, structural = true): 'accept' | 'same' | Rejection['reason'] {
+    if (cur && cur.rev === c.rev) return 'same'; // a retry of something already applied
+    if (c.base === undefined) return !cur || cur.rev < c.rev ? 'accept' : 'conflict';
+    if (cur && (everApplied.get(c.id, c.rev) as { x: number } | undefined)) return 'superseded';
+    if ((cur?.rev ?? '') !== c.base) return 'conflict';
+    if (!structural) return 'accept';
+    // New content inside a plan/goal deleted elsewhere would be invisible: refuse it.
+    if (!c.deleted && c.parent && (get.get(c.parent) as Row | undefined)?.deleted) return 'parent-deleted';
+    // Deleting a plan/goal that has content the deleting device did not know about.
+    if (c.deleted && isWs(c.kind) && liveChildren.all(c.id).length) return 'has-children';
+    return 'accept';
+  }
+
   /**
    * Refuse a request that deletes a lot at once — two or more plans/goals, the last
    * plan/goal, or over half of a non-trivial server — unless the user confirmed that
@@ -91,7 +115,7 @@ export function openDb(path: string): RecordDb {
     for (const c of req.changes) {
       if (!c.deleted) continue;
       const cur = get.get(c.id) as Row | undefined;
-      if (!cur || cur.deleted || cur.rev >= c.rev) continue;
+      if (!cur || cur.deleted || decide(c, cur, false) !== 'accept') continue;
       deletes += 1;
       ids.push(c.id);
       if (cur.kind !== 'log') contentDeletes += 1;
@@ -129,12 +153,21 @@ export function openDb(path: string): RecordDb {
         }
         guardDeletes(req);
         const accepted = new Set<string>();
-        const rejected: string[] = [];
-        for (const c of req.changes) {
+        const rejected: Rejection[] = [];
+        const extra: Row[] = [];
+        // Parents before children; deletions of children before their plan/goal.
+        const rank = (c: SyncRecord) => (c.deleted ? (isWs(c.kind) ? 3 : 2) : isWs(c.kind) ? 0 : 1);
+        for (const c of [...req.changes].sort((a, b) => rank(a) - rank(b))) {
           const cur = get.get(c.id) as Row | undefined;
-          // Last writer wins: revisions are time-ordered strings.
-          if (cur && cur.rev >= c.rev) {
-            rejected.push(c.id);
+          const verdict = decide(c, cur);
+          if (verdict === 'same') {
+            accepted.add(c.id);
+            continue;
+          }
+          if (verdict !== 'accept') {
+            rejected.push({ id: c.id, reason: verdict });
+            if (verdict === 'parent-deleted') extra.push(get.get(c.parent!) as Row);
+            if (verdict === 'has-children') extra.push(...(liveChildren.all(c.id) as Row[]));
             continue;
           }
           seq += 1;
@@ -144,16 +177,20 @@ export function openDb(path: string): RecordDb {
         }
         // Everything newer than the client's cursor, minus what it just sent us…
         const out = (since.all(req.cursor) as Row[]).filter((r) => !accepted.has(r.id)).map(toRecord);
-        // …plus the winning version of anything we refused, so the client converges.
+        // …plus the current version of anything refused (and what it conflicts with),
+        // so the client can merge and converge.
         const seen = new Set(out.map((r) => r.id));
-        for (const id of rejected) {
-          if (seen.has(id)) continue;
-          const r = get.get(id) as Row | undefined;
-          if (r) out.push(toRecord(r));
-        }
+        const add = (r: Row | undefined) => {
+          if (r && !seen.has(r.id)) {
+            seen.add(r.id);
+            out.push(toRecord(r));
+          }
+        };
+        for (const r of rejected) add(get.get(r.id) as Row | undefined);
+        for (const r of extra) add(r);
         const cursorTag = tagFor(seq);
         db.exec('COMMIT');
-        return { cursor: seq, cursorTag, records: out };
+        return { cursor: seq, cursorTag, records: out, ...(rejected.length ? { rejected } : {}) };
       } catch (e) {
         db.exec('ROLLBACK');
         throw e;

@@ -287,6 +287,7 @@ function SyncIndicator() {
     : st.phase === 'syncing' ? <span className="blue">⟳ 同步中</span>
     : st.phase === 'offline' ? <span className="yellow">⚠ 离线</span>
     : st.confirm ? <span className="yellow">⏸ 同步待确认</span>
+    : st.conflicts.length ? <span className="yellow">⚠ {st.conflicts.length} 处同时编辑</span>
     : st.phase === 'error' ? <span className="red">✗ 同步失败</span>
     : <span className="dim">✓ 已同步</span>;
   const title =

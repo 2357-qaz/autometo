@@ -6,7 +6,7 @@ const guard: DeleteGuard = { error: 'confirm-delete', deletes: 42, live: 50, wor
 function fakeSync(confirm: DeleteGuard | null) {
   return {
     config: () => ({ url: 'http://x', token: 't' }),
-    getStatus: () => ({ phase: 'error', lastSyncAt: null, error: null, pending: 0, confirm }),
+    getStatus: () => ({ phase: 'error', lastSyncAt: null, error: null, pending: 0, confirm, conflicts: [] }),
     confirmDeletes: vi.fn(async () => true),
     restoreFromServer: vi.fn(async () => {}),
   };

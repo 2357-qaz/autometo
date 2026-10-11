@@ -42,6 +42,24 @@ export interface SyncRecord {
   rev: string;
   deleted?: boolean;
   data?: unknown;
+  /**
+   * The revision this edit started from ('' = the record did not exist). The server
+   * applies the edit only on top of exactly that revision; otherwise it refuses and
+   * sends the current version, and the client merges. Absent: plain last-writer-wins.
+   */
+  base?: string;
+}
+
+/** Why the server did not apply a change (it also sends the relevant current records). */
+export interface Rejection {
+  id: string;
+  /**
+   * conflict: the record changed since `base` — merge and resend.
+   * superseded: this exact revision was applied before and has been built upon since.
+   * parent-deleted: its plan/goal was deleted elsewhere.
+   * has-children: a plan/goal still has content this request did not delete.
+   */
+  reason: 'conflict' | 'superseded' | 'parent-deleted' | 'has-children';
 }
 
 export interface SyncRequest {
@@ -77,6 +95,7 @@ export interface SyncResponse {
   records: SyncRecord[];
   /** The server's history no longer contains our cursor (e.g. restored database): reconcile. */
   reset?: boolean;
+  rejected?: Rejection[];
 }
 
 /** What a device persists (together with its state) for syncing. */
@@ -94,6 +113,33 @@ export interface SyncMeta {
   cursorTag?: string;
   /** The full reconciliation with `url` is done; until then the next sync reconciles. */
   synced?: boolean;
+  /** For each pending record: the version its first unsent edit started from (3-way merge base). */
+  bases?: Record<string, PendingBase>;
+  /** Concurrent edits that were merged and need the user's attention (newest last). */
+  conflicts?: ConflictNote[];
+}
+
+export interface PendingBase {
+  /** '' = the record did not exist. */
+  rev: string;
+  data?: unknown;
+  parent?: string;
+}
+
+/** Something two devices changed at the same time: merged, and shown, never silent. */
+export interface ConflictNote {
+  at: number;
+  id: string;
+  kind: RecordKind;
+  title: string;
+  /**
+   * fields: both edited; per field the later edit was kept (the other value is here).
+   * kept-edited: deleted elsewhere while edited here — kept (with this device's edits).
+   * kept-deleted: deleted here while edited elsewhere — kept (with the other edits).
+   * kept-workspace: a plan/goal deleted while another device added to it — kept.
+   */
+  what: 'fields' | 'kept-edited' | 'kept-deleted' | 'kept-workspace';
+  fields?: { name: string; mine: unknown; theirs: unknown; kept: 'mine' | 'theirs' }[];
 }
 
 export function newSyncMeta(clientId = randomId()): SyncMeta {
@@ -308,15 +354,21 @@ export const sameRec = (a: Rec | undefined, b: Rec | undefined) => (a && b ? rec
 /** Stamp a local edit: each changed record gets a new revision now and joins the outbox. */
 export function recordLocal(meta: SyncMeta, changes: RecordChange[], now = Date.now()): SyncMeta {
   if (!changes.length) return meta;
-  let t = Math.max(now, meta.lastT);
+  // One revision for the whole edit (revisions only need to be unique per record): the
+  // clock then stays at the real edit time instead of running ahead by one per record,
+  // so "the later edit" means the one actually made later.
+  const t = Math.max(now, meta.lastT + 1);
+  const rev = makeRev(t, meta.clientId);
   const revs = { ...meta.revs };
   const outbox = { ...meta.outbox };
+  const bases = { ...meta.bases };
   for (const c of changes) {
-    const rev = makeRev(++t, meta.clientId);
+    // The first unsent edit of a record remembers what it started from.
+    if (!outbox[c.id]) bases[c.id] = { rev: revs[c.id] ?? '', data: c.before?.data, parent: c.before?.parent };
     revs[c.id] = rev;
     outbox[c.id] = rev;
   }
-  return { ...meta, revs, outbox, lastT: t };
+  return { ...meta, revs, outbox, bases, lastT: t };
 }
 
 export interface Prepared {
@@ -337,7 +389,9 @@ export function prepareSync(state: AppState, meta: SyncMeta, now = Date.now()): 
   const changes: SyncRecord[] = [];
   for (const [id, rev] of Object.entries(pending)) {
     const r = recs.get(id);
-    changes.push(r ? { id, kind: r.kind, parent: r.parent, rev, data: r.data } : { id, kind: kindOf(id), rev, deleted: true });
+    const base = meta.bases?.[id]?.rev;
+    const b = base === undefined ? {} : { base };
+    changes.push(r ? { id, kind: r.kind, parent: r.parent, rev, data: r.data, ...b } : { id, kind: kindOf(id), rev, deleted: true, ...b });
   }
   return { request: { clientId: meta.clientId, cursor: meta.cursor, cursorTag: meta.cursorTag, changes }, sent: pending };
 }
@@ -373,83 +427,250 @@ function put(merged: Map<string, Rec>, r: SyncRecord): boolean {
 }
 
 const maxTime = (meta: SyncMeta, records: SyncRecord[]) => records.reduce((m, r) => Math.max(m, revTime(r.rev) || 0), meta.lastT);
+const same = (a: unknown, b: unknown) => hashData(a) === hashData(b);
+const isWsKind = (k: RecordKind) => k === 'plan' || k === 'goal';
+/** Bookkeeping fields: merged silently (later wins), never worth a notice. */
+const QUIET = new Set(['updatedAt', '_o', 'lastSeenAt']);
+const MAX_NOTES = 50;
+
+function titleOf(data: unknown, id: string): string {
+  const d = (data ?? {}) as Record<string, unknown>;
+  return String(d.title ?? d.intent ?? d.text ?? d.message ?? id);
+}
+
+type Merge = { rec: Rec | undefined; pending: boolean; note?: Omit<ConflictNote, 'at'> };
+
+/**
+ * Three-way merge of a record edited here (`mine`, pending at `mineRev`) and on the server
+ * (`theirs`), from the version both started from. Field by field: what only one side
+ * changed is taken from it; a field both changed differently keeps the later edit and the
+ * other value goes into a conflict note. Edit vs delete keeps the edit. Nothing is dropped
+ * silently.
+ */
+export function merge3(base: PendingBase, mine: Rec | undefined, theirs: SyncRecord, mineRev: string): Merge {
+  const title = titleOf(mine?.data ?? theirs.data ?? base.data, theirs.id);
+  const note = (what: ConflictNote['what'], fields?: ConflictNote['fields']) => ({ id: theirs.id, kind: theirs.kind, title, what, fields });
+  if (theirs.deleted) {
+    if (!mine) return { rec: undefined, pending: false };
+    return { rec: mine, pending: true, note: note('kept-edited') };
+  }
+  const theirsRec: Rec = { id: theirs.id, kind: theirs.kind, parent: theirs.parent, data: theirs.data };
+  if (!mine) {
+    // They did not really change it: our deletion still applies.
+    if (base.data !== undefined && same(theirs.data, base.data) && theirs.parent === base.parent) return { rec: undefined, pending: true };
+    return { rec: theirsRec, pending: false, note: note('kept-deleted') };
+  }
+  const b = (base.data ?? {}) as Record<string, unknown>;
+  const m = (mine.data ?? {}) as Record<string, unknown>;
+  const t = (theirs.data ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  const fields: NonNullable<ConflictNote['fields']> = [];
+  const later: 'mine' | 'theirs' = mineRev > theirs.rev ? 'mine' : 'theirs';
+  const pick = <T>(bv: T, mv: T, tv: T, name: string): T => {
+    const mC = !same(mv, bv);
+    const tC = !same(tv, bv);
+    if (!mC) return tv;
+    if (!tC || same(mv, tv)) return mv;
+    if (!QUIET.has(name)) fields.push({ name, mine: mv, theirs: tv, kept: later });
+    return later === 'mine' ? mv : tv;
+  };
+  for (const k of new Set([...Object.keys(b), ...Object.keys(m), ...Object.keys(t)])) {
+    const v = pick(b[k], m[k], t[k], k);
+    if (v !== undefined) out[k] = v;
+  }
+  const parent = pick(base.parent, mine.parent, theirs.parent, 'parent');
+  const rec: Rec = { id: theirs.id, kind: theirs.kind, parent, data: out };
+  const conflict = fields.length ? note('fields', fields) : undefined;
+  if (same(out, theirs.data) && parent === theirs.parent) return { rec: theirsRec, pending: false, note: conflict };
+  return { rec, pending: true, note: conflict };
+}
+
+/** Mutable working set while merging server records into the local state. */
+interface Work {
+  merged: Map<string, Rec>;
+  revs: Record<string, string>;
+  outbox: Record<string, string>;
+  bases: Record<string, PendingBase>;
+  notes: ConflictNote[];
+  changed: boolean;
+  t: number;
+  clientId: string;
+  now: number;
+}
+
+function startWork(current: AppState, meta: SyncMeta, now: number): Work {
+  return {
+    merged: decompose(current),
+    revs: { ...meta.revs },
+    outbox: { ...meta.outbox },
+    bases: { ...meta.bases },
+    notes: [],
+    changed: false,
+    t: Math.max(now, meta.lastT),
+    clientId: meta.clientId,
+    now,
+  };
+}
+
+function finish(w: Work, current: AppState, meta: SyncMeta, patch: Partial<SyncMeta>, records: SyncRecord[]): Applied {
+  const conflicts = [...(meta.conflicts ?? []), ...w.notes].slice(-MAX_NOTES);
+  return {
+    state: w.changed ? compose(w.merged.values(), current.ui) : current,
+    meta: { ...meta, revs: w.revs, outbox: w.outbox, bases: w.bases, conflicts, lastT: Math.max(w.t, maxTime(meta, records)), ...patch },
+    changed: w.changed,
+  };
+}
+
+/** Take the server's version of a record. */
+function take(w: Work, r: SyncRecord) {
+  w.changed = put(w.merged, r) || w.changed;
+  w.revs[r.id] = r.rev;
+  delete w.outbox[r.id];
+  delete w.bases[r.id];
+}
+
+/** Keep (or set) local content and queue it on top of the server's current version. */
+function rebase(w: Work, r: SyncRecord, rec: Rec | undefined) {
+  const before = w.merged.get(r.id);
+  if (rec) w.merged.set(r.id, rec);
+  else w.merged.delete(r.id);
+  if (!sameRec(before, rec)) w.changed = true;
+  const rev = makeRev(++w.t, w.clientId);
+  w.revs[r.id] = w.outbox[r.id] = rev;
+  w.bases[r.id] = { rev: r.rev, data: r.deleted ? undefined : r.data, parent: r.parent };
+}
+
+/** The server's current version of a record this device has a pending edit of. */
+function settle(w: Work, r: SyncRecord, reason?: Rejection['reason']) {
+  const pending = w.outbox[r.id];
+  const base = w.bases[r.id];
+  // Our exact revision is already in the server's history and was built upon since.
+  if (reason === 'superseded') return take(w, r);
+  // The plan/goal we deleted has content we did not know about: keep it.
+  if (reason === 'has-children') {
+    w.notes.push({ at: w.now, id: r.id, kind: r.kind, title: titleOf(r.data, r.id), what: 'kept-workspace' });
+    return take(w, r);
+  }
+  if (!base) {
+    // No base known (older pending entry): last writer wins.
+    if (pending > r.rev) return;
+    return take(w, r);
+  }
+  if (base.rev === r.rev) return; // the server is still where our edit started: it applies as is
+  const m = merge3(base, w.merged.get(r.id), r, pending);
+  if (m.note) w.notes.push({ at: w.now, ...m.note });
+  if (m.pending) rebase(w, r, m.rec);
+  else take(w, { ...r, ...(m.rec ? { data: m.rec.data, parent: m.rec.parent } : {}) });
+}
+
+/** A plan/goal deleted on the server while this device still has unsent content in it. */
+function hasPendingChildren(w: Work, wsId: string): boolean {
+  for (const id of Object.keys(w.outbox)) if (w.merged.get(id)?.parent === wsId) return true;
+  return false;
+}
+
+function incoming(w: Work, r: SyncRecord, reason?: Rejection['reason']) {
+  if (w.outbox[r.id]) return settle(w, r, reason);
+  const known = w.revs[r.id];
+  if (known && known > r.rev) return; // we hold something newer (the server will hear of it)
+  if (r.deleted && isWsKind(r.kind) && w.merged.has(r.id) && hasPendingChildren(w, r.id)) {
+    w.notes.push({ at: w.now, id: r.id, kind: r.kind, title: titleOf(w.merged.get(r.id)!.data, r.id), what: 'kept-workspace' });
+    return rebase(w, r, w.merged.get(r.id));
+  }
+  take(w, r);
+}
 
 /**
  * Merge a server response into the CURRENT state (which may have changed while the
- * request was in flight). Sent entries still at the sent revision are acknowledged;
- * a remote record wins unless this device holds a newer pending edit of it.
+ * request was in flight). Sent entries the server applied are acknowledged — or, if
+ * edited again meanwhile, now based on what was sent. Refused ones stay pending and are
+ * merged with the server's current version.
  */
-export function applyResponse(current: AppState, meta: SyncMeta, sent: Record<string, string>, response: SyncResponse): Applied {
-  const revs = { ...meta.revs };
-  const outbox = { ...meta.outbox };
-  for (const [id, rev] of Object.entries(sent)) if (outbox[id] === rev) delete outbox[id];
-  const merged = decompose(current);
-  let changed = false;
-  for (const r of response.records) {
-    const mine = outbox[r.id] ?? revs[r.id];
-    if (mine && mine > r.rev) continue; // ours is newer: pending, or the server will send it back
-    changed = put(merged, r) || changed;
-    revs[r.id] = r.rev;
-    delete outbox[r.id];
+export function applyResponse(current: AppState, meta: SyncMeta, sent: SyncRecord[], response: SyncResponse, now = Date.now()): Applied {
+  const w = startWork(current, meta, now);
+  const refused = new Map((response.rejected ?? []).map((r) => [r.id, r.reason]));
+  for (const c of sent) {
+    if (refused.has(c.id)) continue;
+    if (w.outbox[c.id] === c.rev) {
+      delete w.outbox[c.id];
+      delete w.bases[c.id];
+    } else if (w.outbox[c.id]) {
+      w.bases[c.id] = { rev: c.rev, data: c.deleted ? undefined : c.data, parent: c.parent };
+    }
   }
-  return {
-    state: changed ? compose(merged.values(), current.ui) : current,
-    meta: { ...meta, revs, outbox, cursor: response.cursor, cursorTag: response.cursorTag, lastT: maxTime(meta, response.records), synced: true },
-    changed,
-  };
+  const returned = new Set(response.records.map((r) => r.id));
+  for (const r of response.records) incoming(w, r, refused.get(r.id));
+  // Refused as a conflict but the server has no such record (any more): it is new there.
+  for (const [id, reason] of refused) if (reason === 'conflict' && !returned.has(id) && w.bases[id]) w.bases[id] = { rev: '' };
+  return finish(w, current, meta, { cursor: response.cursor, cursorTag: response.cursorTag, synced: true }, response.records);
 }
 
 /**
  * Full reconciliation against everything a server holds (first contact, another
- * server, or a server whose history went back). Per record the newer revision wins;
- * what only this device has is queued for upload. A record this device never edited
- * itself (no revision: older data, untouched defaults) yields to the server — except
- * settings changed before revisions existed, which compete by their own edit time.
+ * server, or a server whose history went back). Per record: a pending edit is merged
+ * with the server's version (or, without a known base, the newer revision wins); what
+ * only this device has is queued for upload. A record this device never edited itself
+ * (no revision: older data, untouched defaults) yields to the server — except settings
+ * changed before revisions existed, which compete by their own edit time.
  */
 export function reconcile(current: AppState, meta: SyncMeta, server: SyncResponse, now = Date.now()): Applied {
-  const revs = { ...meta.revs };
-  const outbox = { ...meta.outbox };
-  const merged = decompose(current);
-  const local = new Map(merged);
-  let t = Math.max(now, meta.lastT);
-  const fresh = () => makeRev(++t, meta.clientId);
+  const w = startWork(current, meta, now);
+  const local = new Map(w.merged);
+  const fresh = () => makeRev(++w.t, w.clientId);
   const onServer = new Set<string>();
-  let changed = false;
   for (const r of server.records) {
     onServer.add(r.id);
-    const mine = outbox[r.id] ?? revs[r.id];
-    if (mine && mine > r.rev) {
-      outbox[r.id] = mine; // ours is newer: (re)send it
+    const known = w.outbox[r.id] ?? w.revs[r.id];
+    if (known === r.rev) {
+      delete w.outbox[r.id]; // the server has exactly our version
+      delete w.bases[r.id];
       continue;
     }
-    if (mine === r.rev) {
-      delete outbox[r.id]; // the server already has exactly our version
+    if (w.outbox[r.id]) {
+      settle(w, r);
+      continue;
+    }
+    if (known && known > r.rev) {
+      // We hold a newer version the server lost (e.g. restored backup): send it on top of theirs.
+      w.outbox[r.id] = known;
+      w.bases[r.id] = { rev: r.rev, data: r.deleted ? undefined : r.data, parent: r.parent };
       continue;
     }
     const l = local.get(r.id);
-    if (!mine && !r.deleted && l && (r.kind === 'settings' || r.kind === 'hie') && !isUntouchedDefault(l)) {
+    if (!known && !r.deleted && l && (r.kind === 'settings' || r.kind === 'hie') && !isUntouchedDefault(l)) {
       const localAt = (l.data as { updatedAt?: number }).updatedAt ?? 0;
       const remoteAt = (r.data as { updatedAt?: number } | undefined)?.updatedAt ?? revTime(r.rev);
       if (localAt > remoteAt) {
-        outbox[r.id] = revs[r.id] = fresh();
+        w.outbox[r.id] = w.revs[r.id] = fresh();
+        w.bases[r.id] = { rev: r.rev, data: r.data, parent: r.parent };
         continue;
       }
     }
-    changed = put(merged, r) || changed;
-    revs[r.id] = r.rev;
-    delete outbox[r.id];
+    incoming(w, r);
   }
   for (const [id, r] of local) {
-    if (onServer.has(id) || outbox[id] || isUntouchedDefault(r)) continue;
-    outbox[id] = revs[id] ??= fresh(); // only here: upload it
+    if (onServer.has(id) || w.outbox[id] || isUntouchedDefault(r)) continue;
+    w.outbox[id] = w.revs[id] ??= fresh(); // only here: upload it as new
+    w.bases[id] = { rev: '' };
   }
-  // A pending deletion of something the server never had: nothing to tell it.
-  for (const id of Object.keys(outbox)) if (!onServer.has(id) && !merged.has(id)) delete outbox[id];
-  return {
-    state: changed ? compose(merged.values(), current.ui) : current,
-    meta: { ...meta, revs, outbox, cursor: server.cursor, cursorTag: server.cursorTag, lastT: Math.max(t, maxTime(meta, server.records)) },
-    changed,
-  };
+  for (const id of Object.keys(w.outbox)) {
+    if (onServer.has(id)) continue;
+    if (!w.merged.has(id)) {
+      // A pending deletion of something the server never had: nothing to tell it.
+      delete w.outbox[id];
+      delete w.bases[id];
+    } else w.bases[id] = { rev: '' }; // new to this server
+  }
+  return finish(w, current, meta, { cursor: server.cursor, cursorTag: server.cursorTag }, server.records);
+}
+
+/** Change one record of a state (used to act on a conflict note). */
+export function withRecord(state: AppState, id: string, fn: (r: Rec | undefined) => Rec | undefined): AppState {
+  const recs = decompose(state);
+  const next = fn(recs.get(id));
+  if (next) recs.set(id, next);
+  else recs.delete(id);
+  return compose(recs.values(), state.ui);
 }
 
 /**
@@ -470,6 +691,8 @@ export function migrateMeta(raw: unknown, state: AppState, now = Date.now()): Sy
     cursor: Number(m.cursor) || 0,
     cursorTag: m.cursorTag,
     synced: m.synced,
+    bases: m.bases ?? {},
+    conflicts: m.conflicts ?? [],
   };
   if (m.base && !m.revs) {
     const base = m.base;

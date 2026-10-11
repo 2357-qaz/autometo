@@ -76,6 +76,10 @@ describe('single-document persistence', () => {
     const b = open();
     a.store.mutate('a', (s) => void ops.addTask(s, 'from A'));
     a.store.mutate('a2', (s) => void ops.updateTask(s, s.plans[0].tasks[0].id, { title: 'A edit' }));
+    const later = Date.now() + 50;
+    while (Date.now() < later) {
+      /* B's edit happens measurably later (same-millisecond edits are concurrent: either may win) */
+    }
     b.store.mutate('b', (s) => void ops.addTask(s, 'from B'));
     b.store.mutate('b2', (s) => void ops.updateTask(s, s.plans[0].tasks[0].id, { title: 'B edit (later)' }));
     expect(a.store.flush()).toBe(true);

@@ -3,7 +3,9 @@ import {
   activePlan,
   activeSession,
   currentWs,
+  describeConflict,
   describeGuard,
+  fieldLabel,
   EFFORT_ORDER,
   EFFORTS,
   FATIGUE_LABELS,
@@ -239,6 +241,39 @@ export function formFor(intent: Intent, store: Store, sync: SyncClient): FormSpe
     case 'sync': {
       const cfg = sync.config();
       const guard = sync.getStatus().confirm;
+      const conflicts = sync.getStatus().conflicts;
+      if (cfg && !guard && conflicts.length) {
+        const shown = conflicts.slice(-6);
+        const options = [{ value: 'dismiss', label: '知道了，全部清除', hint: '合并结果保持不变' }];
+        shown.forEach((n, i) => {
+          if (n.what === 'fields') for (const f of n.fields ?? []) {
+            const other = f.kept === 'mine' ? f.theirs : f.mine;
+            options.push({ value: `f:${i}:${f.name}`, label: `「${n.title}」${fieldLabel(f.name)}改用另一个值`, hint: String(other ?? '（空）') });
+          } else options.push({ value: `d:${i}`, label: `删除「${n.title}」`, hint: '照删除的那一方处理' });
+        });
+        options.push({ value: 'later', label: '稍后再看', hint: '' });
+        return {
+          title: '同时编辑',
+          color: '#e0c07a',
+          desc: shown.map((n) => `· ${describeConflict(n)}`).join('\n'),
+          fields: [{ kind: 'select', key: 'act', label: '怎么处理', options, initial: 'dismiss' }],
+          submit: (v) => {
+            const act = String(v.act);
+            if (act === 'later') return { text: '保留提示，随时 /sync 再看' };
+            if (act === 'dismiss') {
+              sync.dismissConflicts();
+              return { text: '已清除提示' };
+            }
+            const [k, i, field] = act.split(':');
+            const n = shown[Number(i)];
+            if (k === 'd') return { text: sync.resolveConflict(n, 'delete') };
+            const f = n.fields!.find((x) => x.name === field)!;
+            // "The other value": whichever was not kept.
+            const value = f.kept === 'mine' ? f.theirs : f.mine;
+            return { text: sync.resolveConflict({ ...n, fields: [{ ...f, mine: value }] }, { field }) };
+          },
+        };
+      }
       if (cfg && guard) {
         return {
           title: '同步已暂停',

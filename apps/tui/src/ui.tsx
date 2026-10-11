@@ -199,6 +199,7 @@ function StatusLine({ state, sync, notice, preview, keys, saveError }: { state: 
     : st.phase === 'syncing' ? { t: '⟳ 同步中', c: C.blue }
     : st.phase === 'offline' ? { t: '⚠ 离线', c: C.yellow }
     : st.confirm ? { t: '⏸ 同步暂停：大量删除待确认（/sync）', c: C.yellow }
+    : st.conflicts.length ? { t: `⚠ ${st.conflicts.length} 处同时编辑已合并（/sync 查看）`, c: C.yellow }
     : st.phase === 'error' ? { t: `✗ ${st.error ?? '同步失败'}`, c: C.red }
     : { t: `✓ 已同步${st.lastSyncAt ? ` ${fmtAgo(st.lastSyncAt)}` : ''}`, c: C.dim };
   const dot: Seg = { t: ' · ', c: C.faint };

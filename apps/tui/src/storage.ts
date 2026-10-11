@@ -1,7 +1,7 @@
 // File storage under ~/.automedo (override with AUTOMEDO_HOME).
 // state.json holds the state AND the sync meta, written atomically (temp file + rename),
 // so a sync round is committed by a single rename.
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, watch } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync, watch } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createDocPersistence, type AppState, type DocPersistence, type Store, type SyncConfig, type SyncMeta, type SyncStorage } from '@automedo/core';
@@ -16,12 +16,32 @@ function ensureDir() {
   mkdirSync(homeDir(), { recursive: true, mode: 0o700 });
 }
 
-/** Write via temp file + rename so a crash never leaves half a file behind. */
+/**
+ * Write via temp file + rename so a crash never leaves half a file behind, with the
+ * data flushed to the disk before the rename and the rename flushed after it — so it
+ * also holds across a power cut, not just a crashed process.
+ */
 function writeAtomic(path: string, data: string, mode = 0o600) {
   ensureDir();
   const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, data, { mode });
+  const fd = openSync(tmp, 'w', mode);
+  try {
+    writeSync(fd, data);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(tmp, path);
+  try {
+    const dir = openSync(homeDir(), 'r');
+    try {
+      fsyncSync(dir);
+    } finally {
+      closeSync(dir);
+    }
+  } catch {
+    /* some platforms (Windows) cannot fsync a directory */
+  }
 }
 
 function readJson<T>(path: string): T | null {

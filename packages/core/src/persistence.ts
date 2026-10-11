@@ -11,7 +11,7 @@
 // overwriting it.
 import { emptyState, normalize } from './state';
 import type { PersistAdapter, Store } from './store';
-import { compose, decompose, diffRecords, migrateMeta, newSyncMeta, recordLocal, sameRec, type SyncMeta } from './sync';
+import { compose, decompose, diffRecords, merge3, migrateMeta, newSyncMeta, recordLocal, sameRec, type PendingBase, type SyncMeta } from './sync';
 import type { AppState } from './types';
 import { repairDuplicateIds } from './validate';
 
@@ -57,9 +57,20 @@ export function mergeMeta(ours: SyncMeta | null, theirs: SyncMeta | null): SyncM
     const r = a.outbox[id];
     return r !== undefined && r === revs[id] && !(b.revs[id] === r && b.outbox[id] === undefined);
   };
+  const bases: Record<string, PendingBase> = {};
   for (const id of new Set([...Object.keys(ours.outbox), ...Object.keys(theirs.outbox)])) {
-    if (pending(ours, theirs, id) || pending(theirs, ours, id)) outbox[id] = revs[id];
+    if (pending(ours, theirs, id) || pending(theirs, ours, id)) {
+      outbox[id] = revs[id];
+      // The base of the side whose edit is still pending (the oldest unsent starting point).
+      const base = (ours.outbox[id] === revs[id] ? ours : theirs).bases?.[id] ?? (ours.bases?.[id] || theirs.bases?.[id]);
+      if (base) bases[id] = base;
+    }
   }
+  const seenNote = new Set<string>();
+  const conflicts = [...(theirs.conflicts ?? []), ...(ours.conflicts ?? [])]
+    .filter((n) => !seenNote.has(`${n.at}:${n.id}`) && seenNote.add(`${n.at}:${n.id}`))
+    .sort((a, b) => a.at - b.at)
+    .slice(-50);
   // Both sides' data are in the merge, so the further sync position applies (same server).
   const pos = ours.url === theirs.url && ours.cursor > theirs.cursor ? ours : theirs;
   return {
@@ -71,6 +82,8 @@ export function mergeMeta(ours: SyncMeta | null, theirs: SyncMeta | null): SyncM
     cursor: pos.cursor,
     cursorTag: pos.cursorTag,
     synced: pos.synced,
+    bases,
+    conflicts,
   };
 }
 
@@ -80,9 +93,20 @@ export function mergeDocs(base: AppState, ours: { state: AppState; meta: SyncMet
   const t = decompose(theirs.state);
   const merged = new Map(t);
   for (const c of diffRecords(b, decompose(ours.state))) {
-    if (!sameRec(t.get(c.id), b.get(c.id))) {
-      // Both changed this record: the newer revision wins.
-      if ((theirs.meta?.revs[c.id] ?? '') > (ours.meta?.revs[c.id] ?? '')) continue;
+    const tr = t.get(c.id);
+    if (!sameRec(tr, b.get(c.id))) {
+      // Both writers changed this record: merge field by field from the common version
+      // (the later edit wins a field both changed). Same device, so no notice.
+      const theirsRev = theirs.meta?.revs[c.id] ?? '';
+      const m = merge3(
+        { rev: '', data: c.before?.data, parent: c.before?.parent },
+        c.after,
+        tr ? { id: c.id, kind: tr.kind, parent: tr.parent, data: tr.data, rev: theirsRev } : { id: c.id, kind: c.after?.kind ?? c.before!.kind, rev: theirsRev, deleted: true },
+        ours.meta?.revs[c.id] ?? '',
+      );
+      if (m.rec) merged.set(c.id, m.rec);
+      else merged.delete(c.id);
+      continue;
     }
     if (c.after) merged.set(c.id, c.after);
     else merged.delete(c.id);
