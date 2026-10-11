@@ -1,4 +1,4 @@
-import { ops, normalize, compose, decompose, createStore, emptyState, prepareSync, newSyncMeta } from '../packages/core/src/index';
+import { ops, normalize, compose, decompose, createStore, emptyState, prepareSync } from '../packages/core/src/index';
 import { server, device, fixture, gate, title, titles, assert, T0 } from './harness';
 
 export interface Evidence { id: string; actual: unknown; expected: unknown; detail?: unknown }
