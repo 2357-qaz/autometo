@@ -6,6 +6,7 @@
 // in a single atomic write — one localStorage key, or one file renamed into
 // place — makes that write the commit point of a sync round.
 import { emptyState, normalize } from './state';
+import { repairDuplicateIds } from './validate';
 import type { PersistAdapter, Store } from './store';
 import type { SyncMeta } from './sync';
 import type { AppState } from './types';
@@ -38,7 +39,7 @@ export function createDocPersistence(io: DocIO, legacyMeta?: () => SyncMeta | nu
   const parse = (raw: string) => {
     const doc = JSON.parse(raw) as Doc;
     const { syncMeta, ...rest } = doc;
-    return { state: normalize(rest), meta: syncMeta ?? null };
+    return { state: repairDuplicateIds(normalize(rest)), meta: syncMeta ?? null };
   };
 
   return {

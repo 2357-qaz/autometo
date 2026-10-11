@@ -1,4 +1,4 @@
-import { ops, normalize, compose, decompose, createStore, emptyState, prepareSync } from '../packages/core/src/index';
+import { ops, compose, decompose, createStore, createDocPersistence, emptyState, parseImport, prepareSync } from '../packages/core/src/index';
 import { server, device, fixture, gate, title, titles, assert, T0 } from './harness';
 
 export interface Evidence { id: string; actual: unknown; expected: unknown; detail?: unknown }
@@ -115,12 +115,15 @@ export const flushRetry: Scenario = async () => {
   return { id: 'R08', actual: JSON.parse(disk).plans[0].tasks[0].title, expected: 'must persist', detail: { writes, error: store.saveError() } };
 };
 
+// Adapted after the fix: importing goes through parseImport (normalize is also the
+// load path of the device's own data, which must not lock the user out). Stricter than
+// before: import must reject AND loading such data must keep both entities.
 export const duplicateImport: Scenario = async () => {
   const s = fixture(); s.plans[0].tasks.push({ ...s.plans[0].tasks[0], title: 'different content, same id' });
   let rejected = false;
-  try { normalize(s); } catch { rejected = true; }
-  const normalized = rejected ? s : normalize(s);
-  return { id: 'R09', actual: rejected, expected: true, detail: { before: s.plans[0].tasks.length, afterSyncRoundTrip: compose(decompose(normalized).values(), s.ui).plans[0].tasks.length } };
+  try { parseImport(s); } catch { rejected = true; }
+  const loaded = createDocPersistence({ read: () => JSON.stringify(s), write() {} }).load().state;
+  return { id: 'R09', actual: { rejected, keptOnLoad: compose(decompose(loaded).values(), s.ui).plans[0].tasks.length }, expected: { rejected: true, keptOnLoad: 2 }, detail: { before: s.plans[0].tasks.length } };
 };
 
 export const reviseBaseline: Scenario = async () => {

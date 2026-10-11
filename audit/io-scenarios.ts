@@ -114,9 +114,11 @@ export async function serviceWorker() {
 
 export const poisonedShell: Scenario = async () => {
   const sw = await serviceWorker();
-  assert.equal((await sw.navigate()).status, 503);
+  // Adapted after the fix: during the 503 the user now also gets the last good shell
+  // (the original precondition asserted the 503 reached the user).
+  const during = await sw.navigate();
   sw.offline(); const offline = await sw.navigate();
-  return { id: 'R14', actual: { status: offline.status, body: await offline.text() }, expected: { status: 200, body: '<html>working shell</html>' } };
+  return { id: 'R14', actual: { during: during.status, status: offline.status, body: await offline.text() }, expected: { during: 200, status: 200, body: '<html>working shell</html>' } };
 };
 
 export const ioScenarios: Scenario[] = [fileWriters, browserWriters, cliSaveFailure, poisonedShell];

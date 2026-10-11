@@ -149,7 +149,7 @@ export function baseline(p: Plan): PlanVersion | undefined {
 }
 
 function pushVersion(p: Plan, message: string): PlanVersion {
-  const ver = snapshot(p, (p.versions[p.versions.length - 1]?.v ?? 0) + 1, message);
+  const ver = { id: uid(), ...snapshot(p, (p.versions[p.versions.length - 1]?.v ?? 0) + 1, message) };
   p.versions.push(ver);
   return ver;
 }
@@ -231,8 +231,9 @@ export function revisePhase(d: AppState, phaseId: string, newGoal: string, reaso
   const g = newGoal.trim() || fail('修正后的阶段目标不能为空');
   const r = reason.trim() || fail('请写下修正原因——这是复盘最有价值的部分');
   const old = ph.goal || '（未设定）';
-  ph.goal = g;
+  // The baseline must capture the plan BEFORE the revision.
   if (!p.versions.length) pushVersion(p, '基准（修正前）');
+  ph.goal = g;
   const before = p.versions[p.versions.length - 1].v;
   const ver = pushVersion(p, r);
   emit(d, p, {

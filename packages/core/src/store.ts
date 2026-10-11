@@ -20,8 +20,11 @@ export interface Store {
   canUndo(): boolean;
   subscribe(l: Listener): () => void;
   saveError(): string | null;
-  /** Write any pending change immediately (e.g. before the page/process exits). */
-  flush(): void;
+  /**
+   * Write any pending change immediately (e.g. before the page/process exits).
+   * Returns false if it could not be written (see saveError); it stays pending.
+   */
+  flush(): boolean;
 }
 
 export function createStore(initial: AppState, persist?: PersistAdapter, debounceMs = 150): Store {
@@ -30,23 +33,34 @@ export function createStore(initial: AppState, persist?: PersistAdapter, debounc
   const undo: { state: AppState; label: string }[] = [];
   const listeners = new Set<Listener>();
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  // `dirty` stays set until a write succeeds: a failed save is retried (with backoff)
+  // and by every flush, instead of being forgotten with its timer.
+  let dirty = false;
+  let failures = 0;
 
-  const save = () => {
+  const save = (): boolean => {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = null;
-    if (!persist) return;
+    if (!persist || !dirty) return true;
     try {
       persist.save(state);
+      dirty = false;
+      failures = 0;
       saveErr = null;
     } catch (e) {
       saveErr = `保存失败：${(e as Error).message}`;
+      failures += 1;
+      saveTimer = setTimeout(save, Math.min(30_000, 1000 * 2 ** (failures - 1)));
+      (saveTimer as { unref?: () => void }).unref?.(); // never keep a CLI process alive just to retry
     }
     listeners.forEach((l) => l());
+    return !dirty;
   };
   const scheduleSave = () => {
     if (!persist) return;
+    dirty = true;
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(save, debounceMs);
+    saveTimer = setTimeout(save, failures ? Math.min(30_000, 1000 * 2 ** (failures - 1)) : debounceMs);
   };
   const set = (next: AppState) => {
     state = next;
@@ -83,7 +97,7 @@ export function createStore(initial: AppState, persist?: PersistAdapter, debounc
     },
     saveError: () => saveErr,
     flush() {
-      if (saveTimer) save();
+      return save();
     },
   };
 }

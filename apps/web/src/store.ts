@@ -15,11 +15,17 @@ function legacyMeta(): SyncMeta | null {
   }
 }
 
+/** Set when a broken document could not be backed up: then we must never write over it. */
+let writeBlocked: string | null = null;
+
 // State and sync meta share ONE key, so a sync is committed by a single atomic setItem.
 export const persistence = createDocPersistence(
   {
     read: () => localStorage.getItem(STORAGE_KEY),
-    write: (t) => localStorage.setItem(STORAGE_KEY, t),
+    write: (t) => {
+      if (writeBlocked) throw new Error(writeBlocked);
+      localStorage.setItem(STORAGE_KEY, t);
+    },
   },
   legacyMeta,
 );
@@ -41,8 +47,10 @@ export function loadFromStorage(): LoadResult {
   const backupKey = `${STORAGE_KEY}.corrupt.${Date.now()}`;
   try {
     if (loaded.raw) localStorage.setItem(backupKey, loaded.raw);
-  } catch {
-    /* ignore */
+  } catch (e) {
+    // No backup → the broken original is the only copy: never overwrite it.
+    writeBlocked = '本地数据损坏且无法备份，为避免覆盖原数据，已停用保存';
+    return { state: emptyState(), error: `本地数据读取失败：${loaded.error}。备份也失败了（${(e as Error).message}），原数据保持不动，本次修改不会被保存。请先导出或清理浏览器存储空间。` };
   }
   return { state: emptyState(), error: `本地数据读取失败：${loaded.error}。原始数据已备份到 ${backupKey}。` };
 }
@@ -50,7 +58,10 @@ export function loadFromStorage(): LoadResult {
 export function createBrowserStore(initial: AppState): Store {
   const store = createStore(initial, persistence.persist);
   persistence.attach(store);
+  // iOS may kill a backgrounded PWA without beforeunload: also write when hidden.
   window.addEventListener('beforeunload', () => store.flush());
+  window.addEventListener('pagehide', () => store.flush());
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && store.flush());
   return store;
 }
 

@@ -57,6 +57,8 @@ export interface LogEntry {
 
 /** A snapshot of the plan structure — the "commit" a Plan Diff compares against. */
 export interface PlanVersion {
+  /** Globally unique (sync identity); `v` is only the display number. Absent on old data. */
+  id?: string;
   v: number;
   at: number;
   message: string;

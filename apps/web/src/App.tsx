@@ -4,7 +4,7 @@ import type { Intent as Dialog } from '@automedo/core';
 import { execute, type CmdCtx } from '@automedo/core';
 import { activeSession, budgetLevel, hieAdvice, latestFatigue, tokensToday } from '@automedo/core';
 import { ops } from '@automedo/core';
-import { currentWs, normalize, type Store, type SyncClient } from '@automedo/core';
+import { currentWs, parseImport, type Store, type SyncClient } from '@automedo/core';
 import { useStore } from './store';
 import type { AppState, Workspace } from '@automedo/core';
 import { fmtAgo, fmtDate } from '@automedo/core';
@@ -75,7 +75,7 @@ export function App({ store, sync, loadError, launch = null }: { store: Store; s
     if (!f) return;
     let next: AppState;
     try {
-      next = normalize(JSON.parse(await f.text()));
+      next = parseImport(JSON.parse(await f.text()));
     } catch (err) {
       say({ cmd: '/import', text: `导入失败：${(err as Error).message}`, error: true });
       return;

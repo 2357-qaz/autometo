@@ -7,7 +7,7 @@ import {
   createStore,
   currentWs,
   execute,
-  normalize,
+  parseImport,
   ops,
   SyncClient,
   type CmdCtx,
@@ -48,18 +48,23 @@ const fail = (msg: string): never => {
   process.exit(1);
 };
 
+/** Persist or exit non-zero: a command must never report success for data that is not on disk. */
+function flushOrFail(store: Store) {
+  if (!store.flush()) fail(`${store.saveError() ?? '保存失败'}——这次的修改没有写入磁盘，请检查磁盘空间或权限后重试`);
+}
+
 async function withSync(store: Store, fn: () => Promise<void> | void) {
   const sync = new SyncClient(store, fileSyncStorage);
   const configured = !!fileSyncStorage.loadConfig();
   if (configured) await sync.syncNow().catch(() => {});
   await fn();
-  store.flush();
+  flushOrFail(store);
   if (configured) {
     await sync.syncNow();
     const st = sync.getStatus();
     if (st.phase === 'offline' || st.phase === 'error') process.stderr.write(toAnsi([[{ t: `⚠ ${st.error ?? '同步失败'}（已保存在本地，下次自动同步）`, c: C.yellow }]]) + '\n');
   }
-  store.flush();
+  flushOrFail(store);
 }
 
 async function oneShot(argv: string[]) {
@@ -114,7 +119,7 @@ async function oneShot(argv: string[]) {
         if (!arg) fail('用法：automedo import <文件>');
         let next;
         try {
-          next = normalize(JSON.parse(readFileSync(arg, 'utf8')));
+          next = parseImport(JSON.parse(readFileSync(arg, 'utf8')));
         } catch (e) {
           fail(`导入失败：${(e as Error).message}`);
         }
@@ -187,7 +192,7 @@ async function interactive() {
   sync.stop();
   if (activeSession(store.get())) out([[{ t: '✻ 专注 Session 仍在计时 · 回来继续，或 ', c: C.dim }, { t: 'automedo end', c: C.accent }, { t: ' 结束', c: C.dim }]]);
   if (fileSyncStorage.loadConfig()) await Promise.race([sync.syncNow(), new Promise((r) => setTimeout(r, 3000))]);
-  store.flush();
+  flushOrFail(store);
   process.exit(0);
 }
 

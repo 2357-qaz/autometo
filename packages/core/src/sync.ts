@@ -132,16 +132,21 @@ const without = <T extends object, K extends keyof T>(o: T, ...keys: K[]): Omit<
 };
 
 /** Split state into records. `ui` is device-local and never synced. */
-export function decompose(s: AppState): Map<string, Rec> {
+export function decompose(s: AppState, onDuplicate?: (id: string) => void): Map<string, Rec> {
   const out = new Map<string, Rec>();
-  const put = (r: Rec) => out.set(r.id, r);
+  const put = (r: Rec) => {
+    if (onDuplicate && out.has(r.id)) onDuplicate(r.id);
+    out.set(r.id, r);
+  };
   for (const p of s.plans) {
     const pid = `plan:${p.id}`;
     // updatedAt is derived on compose; syncing it would make unrelated edits collide.
     put({ id: pid, kind: 'plan', data: without(p, 'phases', 'tasks', 'versions', 'log', 'updatedAt') });
     p.phases.forEach((ph, i) => put({ id: `phase:${ph.id}`, kind: 'phase', parent: pid, data: { ...ph, _o: i } }));
     p.tasks.forEach((t, i) => put({ id: `task:${t.id}`, kind: 'task', parent: pid, data: { ...t, _o: i } }));
-    for (const v of p.versions) put({ id: `ver:${p.id}:${v.v}`, kind: 'version', parent: pid, data: v });
+    // Old versions are keyed by number; new ones by their own id, so two devices
+    // committing "v3" at the same time keep both snapshots.
+    for (const v of p.versions) put({ id: v.id ? `ver:${p.id}:#${v.id}` : `ver:${p.id}:${v.v}`, kind: 'version', parent: pid, data: v });
     for (const e of p.log) put({ id: `log:${e.id}`, kind: 'log', parent: pid, data: e });
   }
   for (const g of s.goals) {
@@ -160,7 +165,9 @@ export function decompose(s: AppState): Map<string, Rec> {
 }
 
 type Ordered<T> = T & { _o?: number };
-const byOrder = <T>(a: Ordered<T>, b: Ordered<T>) => (a._o ?? 0) - (b._o ?? 0);
+// Equal positions happen when two devices append at the same time: break the tie by id,
+// so every device ends up with the same order instead of keeping its own.
+const byOrder = <T extends { id: string }>(a: Ordered<T>, b: Ordered<T>) => (a._o ?? 0) - (b._o ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const strip = <T>(x: Ordered<T>): T => {
   const c = { ...x };
   delete c._o;
@@ -235,7 +242,10 @@ export function compose(records: Iterable<Rec>, ui: AppState['ui']): AppState {
     const phaseIds = new Set(p.phases.map((x) => x.id));
     // A task whose phase was deleted elsewhere falls back to the first phase.
     p.tasks = (tasks.get(id) ?? []).sort(byOrder).map(strip).map((t) => (t.phaseId && !phaseIds.has(t.phaseId) ? { ...t, phaseId: p.phases[0]?.id ?? null } : t));
-    p.versions.sort((a, b) => a.v - b.v || a.at - b.at);
+    p.versions.sort((a, b) => a.v - b.v || a.at - b.at || ((a.id ?? '') < (b.id ?? '') ? -1 : 1));
+    // Concurrent commits can share a number: renumber in that (deterministic) order so
+    // every device shows the same unique v1…vn and /diff vN stays unambiguous.
+    if (p.versions.some((x, i) => i > 0 && x.v === p.versions[i - 1].v)) p.versions = p.versions.map((x, i) => ({ ...x, v: i + 1 }));
   }
   for (const [id, g] of goals) {
     g.moves = (tasks.get(id) ?? []).sort(byOrder).map(strip);

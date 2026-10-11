@@ -163,7 +163,7 @@ function BarLine({ bar, state }: { bar: Bar; state: AppState }) {
   );
 }
 
-function StatusLine({ state, sync, notice, preview, keys }: { state: AppState; sync: SyncClient; notice: string | null; preview?: { what: PickKind; value: string }; keys?: string }) {
+function StatusLine({ state, sync, notice, preview, keys, saveError }: { state: AppState; sync: SyncClient; notice: string | null; preview?: { what: PickKind; value: string }; keys?: string; saveError?: string | null }) {
   const st = useSync(sync);
   const cols = (useStdout().stdout as NodeJS.WriteStream).columns ?? 100;
   const used = tokensToday(state);
@@ -208,6 +208,13 @@ function StatusLine({ state, sync, notice, preview, keys }: { state: AppState; s
   const shown = fit.right;
   return (
     <Box flexDirection="column">
+      {saveError ? (
+        <Box paddingX={1}>
+          <Text color={C.red} wrap="wrap">
+            ✗ {saveError}（修改还在内存里，会自动重试；在恢复之前不要关闭终端）
+          </Text>
+        </Box>
+      ) : null}
       {message ? (
         <Box paddingX={1}>
           <Text color={C.yellow} wrap="wrap">
@@ -818,6 +825,7 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
             )}
           </Box>
           <StatusLine state={state} sync={sync} notice={notice} preview={bar?.kind === 'pick' ? { what: bar.what, value: pickSpec(bar.what, state).options[bar.idx].value } : undefined}
+            saveError={store.saveError()}
             keys={bar ? (bar.kind === 'pick' ? '←→ 选择 · enter 确认 · esc 取消' : `y ${bar.intent.confirmLabel ?? '确认'} · n 取消`) : undefined}
           />
         </Box>
