@@ -10,8 +10,11 @@ import type { AppState } from './types';
 const UNDO_LIMIT = 50;
 
 export interface PersistAdapter {
-  /** Write the full state. Throw to report a failure (shown to the user). */
-  save(state: AppState): void;
+  /**
+   * Write the full state. Throw to report a failure (shown to the user). May return
+   * the state actually written (merged with another writer's changes): it is adopted.
+   */
+  save(state: AppState): AppState | void;
 }
 
 type Listener = () => void;
@@ -31,7 +34,8 @@ export interface Store {
   replace(next: AppState, label: string): void;
   /**
    * Install state that is not a local edit — merged from the server, or reloaded after
-   * another process wrote the file. No undo entry, and not recorded as an edit.
+   * another process wrote the file. No undo entry, not recorded as an edit, and not by
+   * itself a reason to save (the caller persists it, or it already is on disk).
    */
   applyExternal(next: AppState): void;
   /** Revert the last undoable edit, record by record, where nothing changed since. */
@@ -72,7 +76,11 @@ export function createStore(initial: AppState, persist?: PersistAdapter, debounc
     saveTimer = null;
     if (!persist || !dirty) return true;
     try {
-      persist.save(state);
+      const written = persist.save(state);
+      if (written && written !== state) {
+        state = written; // merged with another writer's changes
+        recs = decompose(written);
+      }
       dirty = false;
       failures = 0;
       saveErr = null;
@@ -125,7 +133,9 @@ export function createStore(initial: AppState, persist?: PersistAdapter, debounc
       pushUndo({ label, changes: commitLocal(next), ui });
     },
     applyExternal(next) {
-      set(next, decompose(next));
+      state = next;
+      recs = decompose(next);
+      listeners.forEach((l) => l());
     },
     undo() {
       const e = undo.pop();

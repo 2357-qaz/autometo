@@ -58,6 +58,14 @@ export function loadFromStorage(): LoadResult {
 export function createBrowserStore(initial: AppState): Store {
   const store = createStore(initial, persistence.persist);
   persistence.attach(store);
+  // Another tab wrote the document: merge its changes into ours right away (our own
+  // unsaved edits included). A write from here also merges if it raced another tab.
+  window.addEventListener('storage', (e) => {
+    const key = (e as StorageEvent).key;
+    if (key !== undefined && key !== null && key !== STORAGE_KEY) return;
+    const merged = persistence.reload();
+    if (merged) store.applyExternal(merged);
+  });
   // iOS may kill a backgrounded PWA without beforeunload: also write when hidden.
   window.addEventListener('beforeunload', () => store.flush());
   window.addEventListener('pagehide', () => store.flush());

@@ -179,8 +179,8 @@ async function interactive() {
   sync.start();
   // Another `automedo …` process changed the data file: pick it up.
   const unwatch = watchState(() => {
-    const fresh = reloadState(); // state + that process's sync meta
-    if (fresh) store.applyExternal({ ...fresh, ui: { ...store.get().ui, ...fresh.ui } }); // not a local edit
+    const merged = reloadState(); // their changes merged with ours (and their sync meta with ours)
+    if (merged) store.applyExternal(merged); // not a local edit
   });
   // Start at the bottom of the terminal (what was on screen scrolls up into history),
   // so the prompt and status line sit on the last rows from the first frame.

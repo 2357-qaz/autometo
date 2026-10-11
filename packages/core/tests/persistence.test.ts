@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDocPersistence } from '../src/persistence';
+import { createDocPersistence, mergeMeta } from '../src/persistence';
 import { createStore } from '../src/store';
 import { emptyState, normalize } from '../src/state';
 import { newSyncMeta } from '../src/sync';
@@ -56,5 +56,47 @@ describe('single-document persistence', () => {
   it("imported data never carries another device's sync meta", () => {
     const s = normalize({ ...emptyState(), syncMeta: { clientId: 'x', cursor: 99, base: {}, lastT: 0 } });
     expect('syncMeta' in s).toBe(false);
+  });
+
+  it('two writers of one document: both changes survive, the newer edit of a shared record wins', () => {
+    const { d, io } = disk(JSON.stringify(emptyState()));
+    const open = () => {
+      const p = createDocPersistence(io);
+      const store = createStore(p.load().state, p.persist, 60_000);
+      p.attach(store);
+      return { p, store };
+    };
+    const seed = open();
+    seed.store.mutate('x', (s) => {
+      ops.createPlan(s, 'P');
+      ops.addTask(s, 'shared');
+    });
+    seed.store.flush();
+    const a = open();
+    const b = open();
+    a.store.mutate('a', (s) => void ops.addTask(s, 'from A'));
+    a.store.mutate('a2', (s) => void ops.updateTask(s, s.plans[0].tasks[0].id, { title: 'A edit' }));
+    b.store.mutate('b', (s) => void ops.addTask(s, 'from B'));
+    b.store.mutate('b2', (s) => void ops.updateTask(s, s.plans[0].tasks[0].id, { title: 'B edit (later)' }));
+    expect(a.store.flush()).toBe(true);
+    expect(b.store.flush()).toBe(true); // B wrote on top of A's newer document: merged
+    const doc = JSON.parse(d.doc!);
+    expect(doc.plans[0].tasks.map((t: { title: string }) => t.title).sort()).toEqual(['B edit (later)', 'from A', 'from B']);
+    // Both writers' unsent edits are still queued for the server.
+    const outboxTasks = Object.keys(doc.syncMeta.outbox).filter((k) => k.startsWith('task:'));
+    expect(outboxTasks).toHaveLength(3);
+    // A picks B's write up by merging (nothing of its own is lost).
+    const merged = a.p.reload()!;
+    expect(merged.plans[0].tasks.map((t) => t.title).sort()).toEqual(['B edit (later)', 'from A', 'from B']);
+    a.store.applyExternal(merged);
+    expect(a.p.reload()).toBeNull(); // nothing new: no ping-pong between writers
+  });
+
+  it('an outbox entry the other writer already synced is not sent again', () => {
+    const base = { ...newSyncMeta('x'), revs: { r1: 'a1', r2: 'a2' }, outbox: { r1: 'a1', r2: 'a2' } };
+    const syncedByOther = { ...base, outbox: { r2: 'a2' }, cursor: 9, synced: true }; // r1 acknowledged there
+    const m = mergeMeta(base, syncedByOther)!;
+    expect(m.outbox).toEqual({ r2: 'a2' });
+    expect(m.cursor).toBe(9);
   });
 });

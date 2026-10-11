@@ -1,7 +1,7 @@
 // File storage under ~/.automedo (override with AUTOMEDO_HOME).
 // state.json holds the state AND the sync meta, written atomically (temp file + rename),
 // so a sync round is committed by a single rename.
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, watch } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, watch } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createDocPersistence, type AppState, type DocPersistence, type Store, type SyncConfig, type SyncMeta, type SyncStorage } from '@automedo/core';
@@ -29,6 +29,37 @@ function readJson<T>(path: string): T | null {
   return JSON.parse(readFileSync(path, 'utf8')) as T;
 }
 
+/**
+ * Cross-process lock around read → merge → write of state.json (a lock file created
+ * exclusively). A lock older than 10 s is from a crashed process and is taken over.
+ */
+function withLock<T>(fn: () => T): T {
+  ensureDir();
+  const lock = file('state.json.lock');
+  const deadline = Date.now() + 5000;
+  const nap = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try {
+      closeSync(openSync(lock, 'wx'));
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > 10_000) rmSync(lock, { force: true });
+      } catch {
+        /* released meanwhile */
+      }
+      if (Date.now() > deadline) throw new Error('数据文件正被另一个 automedo 进程写入，稍后重试');
+      Atomics.wait(nap, 0, 0, 10);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    rmSync(lock, { force: true });
+  }
+}
+
 let lastWrite = 0;
 let doc: DocPersistence | null = null;
 
@@ -41,6 +72,7 @@ function persistence(): DocPersistence {
         writeAtomic(file('state.json'), t);
         lastWrite = statSync(file('state.json')).mtimeMs;
       },
+      exclusive: withLock,
     },
     // Versions before the single-document format kept the meta in its own file.
     () => {
@@ -74,7 +106,7 @@ export function attachStore(store: Store) {
   persistence().attach(store);
 }
 
-/** Reload after another process (e.g. `automedo done`) rewrote the file; also picks up its sync meta. */
+/** Another process (e.g. `automedo done`) rewrote the file: merge it with ours (null: nothing new). */
 export function reloadState(): AppState | null {
   return persistence().reload();
 }
