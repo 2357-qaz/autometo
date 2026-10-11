@@ -17,6 +17,7 @@ export function emptyState(now = Date.now()): AppState {
       activeGoalId: null,
       lastSeenAt: now,
       dismissedCompactId: null,
+      deviceId: Math.random().toString(36).slice(2, 10),
     },
   };
 }

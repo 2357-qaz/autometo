@@ -2,7 +2,7 @@
 // timer and the tests can pin the clock. Each reminder has a stable key so it
 // is delivered once (a new due date or a new session gives a new key).
 import type { AppState } from './types';
-import { activeSession, runStartedAt } from './hie';
+import { runStartedAt } from './hie';
 import { checkpointDue, dueAt, nextCheckpointAt } from './ops';
 import { fmtDate } from './util';
 
@@ -29,8 +29,8 @@ export function dueReminders(s: AppState, now = Date.now()): Reminder[] {
       out.push({ key: `due:${ph.id}:${ph.due}`, title: `阶段逾期 · ${ph.title}`, body: `「${p.title}」的阶段目标日期是 ${fmtDate(dueAt(ph.due)).slice(5)}。完成它、修正目标，或调整日期。`, wsId: p.id });
     }
   }
-  const ses = activeSession(s);
-  if (ses) {
+  // Every running session, whichever device runs it (sessions can run in parallel).
+  for (const ses of s.sessions.filter((x) => x.endedAt == null)) {
     const elapsed = now - runStartedAt(s, ses.runId);
     if (elapsed > ses.plannedMin * 60_000) {
       out.push({ key: `ses:${ses.runId}`, title: '✻ 专注时间到了', body: `已经超过计划的 ${ses.plannedMin} 分钟${ses.intent ? `（${ses.intent}）` : ''}。休息一下，或结束 Session 留个记录。`, wsId: ses.wsId ?? undefined });

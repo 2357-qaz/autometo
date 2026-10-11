@@ -1,7 +1,7 @@
 import type { Intent } from './intents';
 import { describeUndo, type Store } from './store';
 import { activeGoal, activePlan, currentWs } from './state';
-import { activeSession, EFFORT_ORDER, TIER_ORDER } from './hie';
+import { activeSession, EFFORT_ORDER, otherSessions, TIER_ORDER } from './hie';
 import * as ops from './ops';
 import type { Effort, Tier } from './types';
 
@@ -78,8 +78,8 @@ export const COMMANDS: Command[] = [
         return `已添加 #${ops.orderedTasks(ops.requireWs(d)).findIndex((x) => x.id === t.id) + 1}：${t.title}`;
       }),
   },
-  { name: 'start', args: '[#n]', desc: '开始执行任务（同时只有一个进行中）', run: (a, c) => mut(c, '开始任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a || firstPending(d)).id, 'active')) },
-  { name: 'done', args: '[#n]', desc: '完成任务（默认当前进行中）', run: (a, c) => mut(c, '完成任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a).id, 'done')) },
+  { name: 'start', args: '[#n]', desc: '开始执行任务（同时只有一个进行中）', run: (a, c) => mut(c, '开始任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a || firstPending(d), d).id, 'active')) },
+  { name: 'done', args: '[#n]', desc: '完成任务（默认当前进行中）', run: (a, c) => mut(c, '完成任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a, d).id, 'done')) },
   { name: 'next', desc: '完成当前任务并开始下一个', run: (_, c) => mut(c, '下一个任务', (d) => ops.nextTask(d)) },
   {
     name: 'block',
@@ -87,7 +87,7 @@ export const COMMANDS: Command[] = [
     desc: '标记任务阻塞',
     run: (a, c) => {
       const m = a.trim().match(/^#?(\d+)\s*(.*)$/);
-      return mut(c, '标记阻塞', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), m ? m[1] : '').id, 'blocked', m ? m[2] : a));
+      return mut(c, '标记阻塞', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), m ? m[1] : '', d).id, 'blocked', m ? m[2] : a));
     },
   },
   {
@@ -96,10 +96,10 @@ export const COMMANDS: Command[] = [
     desc: '延期任务：推到下一阶段（Goal 中移到末尾）',
     run: (a, c) => {
       const m = a.trim().match(/^#?(\d+)\s*(.*)$/);
-      return mut(c, '延期', (d) => ops.deferTask(d, ops.resolveTask(ops.requireWs(d), m ? m[1] : '').id, m ? m[2] : a));
+      return mut(c, '延期', (d) => ops.deferTask(d, ops.resolveTask(ops.requireWs(d), m ? m[1] : '', d).id, m ? m[2] : a));
     },
   },
-  { name: 'skip', args: '[#n]', desc: '跳过任务', run: (a, c) => mut(c, '跳过任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a).id, 'skipped')) },
+  { name: 'skip', args: '[#n]', desc: '跳过任务', run: (a, c) => mut(c, '跳过任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a, d).id, 'skipped')) },
   {
     name: 'phase',
     args: '<标题> | done',
@@ -190,9 +190,14 @@ export const COMMANDS: Command[] = [
   },
   {
     name: 'end',
-    desc: '结束 Session 并自评疲劳',
-    run: (_, c) => {
-      if (!activeSession(c.store.get())) return { text: '当前没有进行中的 Session', error: true };
+    args: '[other]',
+    desc: '结束 Session 并自评疲劳（other：结束另一台设备上的）',
+    run: (a, c) => {
+      if (a.trim() === 'other') return mut(c, '结束其他设备的 Session', (d) => ops.endSession(d, { other: true }));
+      if (!activeSession(c.store.get())) {
+        const others = otherSessions(c.store.get());
+        return { text: others.length ? `这台设备上没有进行中的 Session。另一台设备上正在专注「${others[0].intent || '未命名'}」，要结束它请用 /end other` : '当前没有进行中的 Session', error: true };
+      }
       c.open({ type: 'endSession' });
     },
   },

@@ -1,4 +1,4 @@
-import { ops, compose, decompose, createStore, createDocPersistence, emptyState, parseImport, prepareSync } from '../packages/core/src/index';
+import { ops, activeSession, otherSessions, compose, decompose, createStore, createDocPersistence, emptyState, parseImport, prepareSync } from '../packages/core/src/index';
 import { server, device, fixture, gate, title, titles, assert, T0 } from './harness';
 
 export interface Evidence { id: string; actual: unknown; expected: unknown; detail?: unknown }
@@ -52,6 +52,10 @@ export const versionCollision: Scenario = async () => {
   } finally { a.close(); b.close(); await srv.close(); }
 };
 
+// Rewritten for the decided semantics (owner's call): sessions on different devices run
+// in PARALLEL, each device keeps its own current task, and the other device's work is
+// shown — never silently closed or overwritten. The original expectation (1 active task,
+// 1 open session after sync) is exactly the silent overwrite the owner ruled out.
 export const concurrentActive: Scenario = async () => {
   const srv = await server(); const s = fixture();
   s.plans[0].tasks.push({ ...s.plans[0].tasks[0], id: 't2', title: 'second' });
@@ -61,7 +65,12 @@ export const concurrentActive: Scenario = async () => {
     a.store.mutate('start A', d => { ops.setTaskStatus(d, 't', 'active'); ops.startSession(d, { intent: 'A', plannedMin: 25, tier: 'sonnet', effort: 'medium' }); });
     b.store.mutate('start B', d => { ops.setTaskStatus(d, 't2', 'active'); ops.startSession(d, { intent: 'B', plannedMin: 25, tier: 'sonnet', effort: 'medium' }); });
     await a.sync(); await b.sync(); await a.sync();
-    return { id: 'R05', actual: { activeTasks: a.store.get().plans[0].tasks.filter(t => t.status === 'active').length, activeSessions: a.store.get().sessions.filter(s => s.endedAt == null).length }, expected: { activeTasks: 1, activeSessions: 1 } };
+    const view = (x: typeof a) => {
+      const st = x.store.get(); const ws = st.plans[0];
+      return { mine: ops.currentTask(ws, st)?.title, session: activeSession(st)?.intent, elsewhere: ops.otherActiveTasks(ws, st).map(t => t.title), others: otherSessions(st).map(o => o.intent) };
+    };
+    return { id: 'R05', actual: { a: view(a), b: view(b), openSessions: a.store.get().sessions.filter(x => x.endedAt == null).length },
+      expected: { a: { mine: 'original', session: 'A', elsewhere: ['second'], others: ['B'] }, b: { mine: 'second', session: 'B', elsewhere: ['original'], others: ['A'] }, openSessions: 2 } };
   } finally { a.close(); b.close(); await srv.close(); }
 };
 

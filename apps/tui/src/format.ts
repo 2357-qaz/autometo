@@ -14,8 +14,9 @@ import {
   type Session,
   type Tier,
   type Workspace,
+  type AppState,
 } from '@automedo/core';
-import { checkpointDue, currentPhase, diffSummary, dueAt, fmtAgo, nextCheckpointAt, orderedTasks, type Goal } from './core-ops';
+import { checkpointDue, currentPhase, currentTask, diffSummary, dueAt, fmtAgo, nextCheckpointAt, orderedTasks, otherActiveTasks, type Goal } from './core-ops';
 
 /** Terminal display width: CJK / full-width characters take two columns. */
 export function displayWidth(s: string): number {
@@ -354,13 +355,17 @@ export function wsHeaderLines(ws: Workspace): Line[] {
   return [[seg('⏵⏵ ', C.violet), seg(g.title, C.fg, { b: true }), ...(g.status !== 'active' ? [seg(`  [${g.status}]`, C.faint)] : [])], [seg('   '), ...meta]];
 }
 
-/** Current task + next todos, numbered so `/done 3` etc. are easy. */
-export function dockLines(ws: Workspace, max = 5): Line[] {
+/**
+ * This device's current task + tasks other devices are on + next todos, numbered so
+ * `/done 3` etc. are easy. Without `state`, the first task in progress is "current".
+ */
+export function dockLines(ws: Workspace, max = 5, state?: Pick<AppState, 'ui'>): Line[] {
   const ordered = orderedTasks(ws);
   const num = (id: string) => ordered.findIndex((t) => t.id === id) + 1;
-  const active = ordered.find((t) => t.status === 'active');
+  const active = currentTask(ws, state);
+  const elsewhere = state ? otherActiveTasks(ws, state) : [];
   const phase = ws.kind === 'plan' ? currentPhase(ws) : undefined;
-  const open = ordered.filter((t) => t.status !== 'done' && t.status !== 'skipped' && t.id !== active?.id);
+  const open = ordered.filter((t) => t.status !== 'done' && t.status !== 'skipped' && t.id !== active?.id && !elsewhere.includes(t));
   const now = phase ? open.filter((t) => t.phaseId === phase.id) : open;
   const later = phase ? open.filter((t) => t.phaseId !== phase.id) : [];
   const list = [...now, ...later];
@@ -371,6 +376,7 @@ export function dockLines(ws: Workspace, max = 5): Line[] {
   else if (list.length) out.push([seg('◇ ', C.faint), seg('没有进行中的任务 · /start 开始下一个', C.dim)]);
   else if (ordered.length) out.push([seg('✓ ', C.green), seg('全部完成 · /compact 收尾', C.fg2)]);
   else out.push([seg('◇ ', C.faint), seg('还没有任务——直接输入一件要做的事', C.dim)]);
+  for (const t of elsewhere) out.push([seg('◆ ', C.violet), seg(t.title, C.fg2), seg(`  #${num(t.id)}`, C.faint), seg('  另一台设备进行中', C.violet)]);
   for (const t of list.slice(0, max)) {
     const isLater = later.includes(t);
     const glyph = t.status === 'blocked' ? '✗' : '☐';

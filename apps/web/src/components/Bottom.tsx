@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import type { Output } from '../ctx';
 import { useApp } from '../ctx';
 import { matchCommands, needsArg } from '@automedo/core';
-import { activeSession, fatigueMult, latestFatigue, runSegmentsTokens, runStartedAt, TIERS, type BudgetLevel } from '@automedo/core';
+import { activeSession, fatigueMult, latestFatigue, otherSessions, runSegmentsTokens, runStartedAt, TIERS, type BudgetLevel } from '@automedo/core';
 import { currentWs } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
 import { useSyncStatus } from '../sync';
@@ -42,6 +42,26 @@ function SpinnerLine() {
       {over && <span className="yellow">已超过计划时长</span>}
       <button className="link" title="结束 Session（f）" onClick={() => run('/end')}>结束</button>
     </div>
+  );
+}
+
+/** Sessions running on other devices: shown, and endable from here if left running. */
+function OtherSessionsLine() {
+  const { state, run } = useApp();
+  const others = otherSessions(state);
+  if (!others.length) return null;
+  return (
+    <>
+      {others.map((s) => (
+        <div key={s.id} className="spinner-line other" role="status">
+          <span className="violet">✻ 另一台设备专注中</span>
+          <span className="dim">
+            ({fmtDuration(Date.now() - runStartedAt(state, s.runId))} / {s.plannedMin}m{s.intent ? ` · ${s.intent}` : ''})
+          </span>
+          <button className="link" title="在那台设备上忘了结束？在这里结束它" onClick={() => run('/end other')}>结束那边的</button>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -181,6 +201,7 @@ export const Bottom = forwardRef<PromptHandle, {
         </div>
       )}
       <SpinnerLine />
+      <OtherSessionsLine />
       {dock}
       <QuickChips show={focused && !v} mode={mode} onPick={(t) => (t.endsWith(' ') ? (setV(t), requestAnimationFrame(() => ta.current?.focus())) : submit(t))} />
       <div className="prompt-wrap">

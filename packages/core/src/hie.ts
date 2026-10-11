@@ -72,8 +72,17 @@ export function tokensToday(state: Pick<AppState, 'sessions' | 'fatigue'>, now =
   return sum;
 }
 
-export function activeSession(state: Pick<AppState, 'sessions'>): Session | undefined {
-  return state.sessions.find((s) => s.endedAt == null);
+/** Whether a session/task runs on this device. Untagged (older) ones count as this device's. */
+export const onThisDevice = (tag: string | undefined, state: Pick<AppState, 'ui'>) => !tag || !state.ui.deviceId || tag === state.ui.deviceId;
+
+/** This device's running session. Other devices may run their own at the same time. */
+export function activeSession(state: Pick<AppState, 'sessions' | 'ui'>): Session | undefined {
+  return state.sessions.find((s) => s.endedAt == null && onThisDevice(s.device, state));
+}
+
+/** Sessions running on other devices right now (shown, never silently ended). */
+export function otherSessions(state: Pick<AppState, 'sessions' | 'ui'>): Session[] {
+  return state.sessions.filter((s) => s.endedAt == null && !onThisDevice(s.device, state));
 }
 
 export function latestFatigue(state: Pick<AppState, 'fatigue'>, now = Date.now()): number | null {

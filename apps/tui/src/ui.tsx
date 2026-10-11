@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import {
   activeSession,
   describeUndo,
+  otherSessions,
   budgetLevel,
   pickSpec,
   type PickKind,
@@ -94,6 +95,24 @@ function useSync(sync: SyncClient): SyncStatus {
 
 const GLYPHS = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢'];
 const VERBS = ['Focusing', 'Crafting', 'Pondering', 'Tinkering', 'Grinding', 'Building', 'Untangling', 'Noodling'];
+
+/** Sessions running on other devices: shown (and endable), never silently closed. */
+function OtherSessions({ state }: { state: AppState }) {
+  const others = otherSessions(state);
+  if (!others.length) return null;
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {others.map((s) => (
+        <Text key={s.id}>
+          <Text color={C.violet}>✻ 另一台设备专注中 </Text>
+          <Text color={C.dim}>
+            ({fmtDuration(Date.now() - runStartedAt(state, s.runId))} / {s.plannedMin}m{s.intent ? ` · ${s.intent}` : ''} · 忘了结束可以 /end other)
+          </Text>
+        </Text>
+      ))}
+    </Box>
+  );
+}
 
 function Spinner({ state }: { state: AppState }) {
   const s = activeSession(state);
@@ -771,9 +790,10 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
       <Box flexDirection="column" justifyContent="flex-end" minHeight={pin.minHeight}>
         <Box ref={pin.ref} flexDirection="column">
           <Spinner state={state} />
+          <OtherSessions state={state} />
           {ws && (
             <Box marginTop={activeSession(state) ? 0 : 1}>
-              <Lines lines={dockLines(ws)} />
+              <Lines lines={dockLines(ws, 5, state)} />
             </Box>
           )}
           {intent?.type === 'switch' ? (

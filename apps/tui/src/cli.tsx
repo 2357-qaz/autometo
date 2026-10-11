@@ -82,7 +82,7 @@ async function oneShot(argv: string[]) {
       case 'status':
       case 'st': {
         if (!ws) return out([[{ t: '还没有打开的 Plan/Goal。运行 automedo 开始，或 automedo ls 查看。', c: C.dim }]]);
-        return out([...wsHeaderLines(ws), ...dockLines(ws, 8)]);
+        return out([...wsHeaderLines(ws), ...dockLines(ws, 8, store.get())]);
       }
       case 'log': {
         if (!ws) fail('还没有打开的 Plan/Goal');
@@ -123,7 +123,8 @@ async function oneShot(argv: string[]) {
         } catch (e) {
           fail(`导入失败：${(e as Error).message}`);
         }
-        store.replace(next!, '导入');
+        // The backup may come from another device: this one keeps its own identity.
+        store.replace({ ...next!, ui: { ...next!.ui, deviceId: store.get().ui.deviceId } }, '导入');
         return out([[{ t: `✓ 已导入 ${next!.plans.length} 个 Plan、${next!.goals.length} 个 Goal`, c: C.green }]]);
       }
       case 'sync':
@@ -166,7 +167,7 @@ async function oneShot(argv: string[]) {
     if (r?.error) fail(r.text);
     if (after && after.id === ws?.id && after.log.length > n0) out(after.log.slice(n0).flatMap((e) => eventLines(e, after, store.get().sessions)));
     else if (r?.text) out([[{ t: r.text, c: C.fg2 }]]);
-    if (after) out(dockLines(after, 3));
+    if (after) out(dockLines(after, 3, store.get()));
   });
 }
 

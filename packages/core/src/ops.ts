@@ -2,7 +2,7 @@
 // human-readable result line. User errors are thrown as UserError.
 // Every meaningful change emits a structured event into the workspace's Execution Log.
 import type { AppState, Checkpoint, DiffLine, Effort, Goal, LogEntry, Plan, PlanVersion, Session, Task, TaskStatus, Tier, Workspace } from './types';
-import { activeSession, fatigueMult, focusedMsBetween, latestFatigue, sessionTokens, tokensBetween, TIERS } from './hie';
+import { activeSession, fatigueMult, focusedMsBetween, latestFatigue, onThisDevice, otherSessions, sessionTokens, tokensBetween, TIERS } from './hie';
 import { activeGoal, activePlan, currentWs, findWs } from './state';
 import { DAY, uid } from './util';
 
@@ -322,16 +322,32 @@ export function orderedTasks(ws: Workspace): Task[] {
   return out;
 }
 
+/**
+ * The task THIS device is working on. Several devices can each have one in progress
+ * (parallel sessions); without `state`, the first one in progress anywhere.
+ */
+export function currentTask(ws: Workspace, state?: Pick<AppState, 'ui'>): Task | undefined {
+  return orderedTasks(ws).find((t) => t.status === 'active' && (!state || onThisDevice(t.activeBy, state)));
+}
+
+/** Tasks in progress on other devices. */
+export function otherActiveTasks(ws: Workspace, state: Pick<AppState, 'ui'>): Task[] {
+  return orderedTasks(ws).filter((t) => t.status === 'active' && !onThisDevice(t.activeBy, state));
+}
+
 export function taskList(ws: Workspace): Task[] {
   return ws.kind === 'plan' ? ws.tasks : ws.moves;
 }
 
 const numOf = (ws: Workspace, id: string) => orderedTasks(ws).findIndex((t) => t.id === id) + 1;
 
-export function resolveTask(ws: Workspace, ref: string | undefined): Task {
+export function resolveTask(ws: Workspace, ref: string | undefined, state?: Pick<AppState, 'ui'>): Task {
   const list = orderedTasks(ws);
   if (!ref || !ref.trim()) {
-    return list.find((t) => t.status === 'active') ?? fail('没有进行中的任务，请指定编号，例如 /done 2');
+    const cur = currentTask(ws, state);
+    if (cur) return cur;
+    const other = state ? otherActiveTasks(ws, state)[0] : undefined;
+    return fail(other ? `这台设备上没有进行中的任务（另一台设备在做「${other.title}」#${numOf(ws, other.id)}），请指定编号` : '没有进行中的任务，请指定编号，例如 /done 2');
   }
   const r = ref.trim().replace(/^#/, '');
   const n = Number(r);
@@ -390,8 +406,14 @@ export function setTaskStatus(d: AppState, taskId: string, status: TaskStatus, n
   if (status === 'active') {
     // First execution freezes the plan as baseline v1 — the reference for Plan Diff.
     if (ws.kind === 'plan' && !ws.versions.length) commitPlan(d, '', true);
-    // Exactly one task in progress at a time, like a focused agent.
-    for (const t of list) if (t.status === 'active' && t.id !== taskId) t.status = 'pending';
+    // One task in progress per device, like a focused agent. Another device's task in
+    // progress is that device's business: it is left alone (parallel sessions).
+    for (const t of list) {
+      if (t.status === 'active' && t.id !== taskId && onThisDevice(t.activeBy, d)) {
+        t.status = 'pending';
+        delete t.activeBy;
+      }
+    }
     if (ws.kind === 'plan' && task.phaseId) {
       const ph = ws.phases.find((x) => x.id === task.phaseId);
       if (ph && ph.status === 'pending') {
@@ -401,6 +423,8 @@ export function setTaskStatus(d: AppState, taskId: string, status: TaskStatus, n
     }
   }
   task.status = status;
+  if (status === 'active' && d.ui.deviceId) task.activeBy = d.ui.deviceId;
+  else delete task.activeBy;
   const now = Date.now();
   if (status === 'done') task.doneAt = now;
   else delete task.doneAt;
@@ -458,7 +482,7 @@ export function cycleTask(d: AppState, taskId: string): string {
 /** Complete the in-progress task (if any) and start the next pending one. */
 export function nextTask(d: AppState): string {
   const ws = requireWs(d);
-  const cur = orderedTasks(ws).find((t) => t.status === 'active');
+  const cur = currentTask(ws, d);
   const parts: string[] = [];
   if (cur) parts.push(setTaskStatus(d, cur.id, 'done'));
   const nx = orderedTasks(requireWs(d)).find((t) => t.status === 'pending');
@@ -651,7 +675,7 @@ export function startSession(d: AppState, opts: { intent: string; plannedMin: nu
   d.hie.effort = opts.effort;
   const id = uid();
   const planned = Math.max(5, Math.round(opts.plannedMin) || 25);
-  d.sessions.push({ id, runId: id, wsId: ws?.id ?? null, tier: opts.tier, effort: opts.effort, intent: opts.intent.trim(), plannedMin: planned, startedAt: Date.now() });
+  d.sessions.push({ id, runId: id, wsId: ws?.id ?? null, tier: opts.tier, effort: opts.effort, intent: opts.intent.trim(), plannedMin: planned, startedAt: Date.now(), ...(d.ui.deviceId ? { device: d.ui.deviceId } : {}) });
   if (ws) {
     emit(d, ws, {
       type: 'session-start',
@@ -668,8 +692,14 @@ export function runSegments(d: Pick<AppState, 'sessions'>, runId: string): Sessi
   return d.sessions.filter((x) => (x.runId ?? x.id) === runId);
 }
 
-export function endSession(d: AppState, opts: { fatigue?: number | null; outcome?: string }): string {
-  const s = activeSession(d) ?? fail('当前没有进行中的 Session');
+/**
+ * End this device's session — or, with `other`, the session left running on another
+ * device (e.g. forgotten there): shown to the user, never ended behind their back.
+ */
+export function endSession(d: AppState, opts: { fatigue?: number | null; outcome?: string; other?: boolean }): string {
+  const s = opts.other
+    ? (otherSessions(d)[0] ?? fail('没有在其他设备上进行中的 Session'))
+    : (activeSession(d) ?? fail(otherSessions(d).length ? '这台设备上没有进行中的 Session。另一台设备上的可以用 /end other 结束' : '当前没有进行中的 Session'));
   const now = Date.now();
   s.endedAt = now;
   // The fatigue reported at the end prices the whole session (every segment of the run,

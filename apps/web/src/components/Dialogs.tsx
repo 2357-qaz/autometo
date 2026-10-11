@@ -241,7 +241,7 @@ function TierPicker({ tier, setTier, effort, setEffort }: { tier: Tier; setTier:
 function StartSession({ minutes }: { minutes?: number }) {
   const { state } = useApp();
   const ws = ops.requireWsSafe(state);
-  const active = ws ? ops.orderedTasks(ws).find((t) => t.status === 'active') : undefined;
+  const active = ws ? ops.currentTask(ws, state) : undefined;
   const [tier, setTier] = useState<Tier>(state.hie.tier);
   const [effort, setEffort] = useState<Effort>(state.hie.effort);
   const [mins, setMins] = useState(String(minutes ?? 25));

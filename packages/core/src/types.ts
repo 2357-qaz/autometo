@@ -74,6 +74,8 @@ export interface Task {
   note?: string;
   createdAt: number;
   doneAt?: number;
+  /** Device working on it while active (several devices can each have one in progress). */
+  activeBy?: string;
 }
 
 export interface Phase {
@@ -138,6 +140,8 @@ export interface Session {
   tokens?: number;
   fatigue?: number; // 1-5 self-report
   outcome?: string;
+  /** Device the session runs on; sessions on different devices run in parallel. */
+  device?: string;
 }
 
 export interface Compact {
@@ -173,5 +177,7 @@ export interface AppState {
     activeGoalId: string | null;
     lastSeenAt: number;
     dismissedCompactId: string | null;
+    /** This device (UI state is never synced). Tags the tasks and sessions it runs. */
+    deviceId?: string;
   };
 }

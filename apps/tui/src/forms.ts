@@ -109,7 +109,7 @@ export function formFor(intent: Intent, store: Store, sync: SyncClient): FormSpe
       };
     case 'session': {
       const ws = currentWs(s);
-      const active = ws ? ops.orderedTasks(ws).find((t) => t.status === 'active') : undefined;
+      const active = ws ? ops.currentTask(ws, s) : undefined;
       return {
         title: '开始专注 Session',
         color: '#d97757',

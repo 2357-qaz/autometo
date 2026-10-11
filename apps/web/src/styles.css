@@ -153,6 +153,8 @@ button, input, textarea, select { font: inherit; color: inherit; }
 /* ───────── bottom: spinner + output + prompt + status ───────── */
 .bottom { padding: 6px 24px 8px; background: var(--bg); }
 .spinner-line { color: var(--accent); margin-bottom: 4px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.dock-elsewhere { color: var(--fg); padding: 2px 0; }
+.spinner-line.other { color: var(--violet); }
 .spinner-line .glyph { display: inline-block; width: 1.2em; text-align: center; }
 .output { margin-bottom: 6px; display: grid; grid-template-columns: 22px 1fr; font-size: 12.5px; }
 .output .cmd { color: var(--fg-2); }

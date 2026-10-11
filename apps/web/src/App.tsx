@@ -87,7 +87,8 @@ export function App({ store, sync, loadError, launch = null }: { store: Store; s
       confirmLabel: '覆盖导入',
       danger: true,
       onConfirm: () => {
-        store.replace(next, '导入备份');
+        // The backup may come from another device: this one keeps its own identity.
+        store.replace({ ...next, ui: { ...next.ui, deviceId: store.get().ui.deviceId } }, '导入备份');
         say({ cmd: '/import', text: `已导入 ${next.plans.length} 个 Plan、${next.goals.length} 个 Goal`, undoable: true });
       },
     });
