@@ -157,6 +157,21 @@ export function makeRev(t: number, clientId: string): string {
   return `${t.toString(36).padStart(9, '0')}.${clientId}`;
 }
 
+/**
+ * Several writers can share one device's clientId (two browser tabs, two terminals on
+ * one data file): each JS realm adds its own writer id, and within a realm time never
+ * repeats — so no two local changes anywhere ever get the same revision.
+ */
+const WRITER = Math.random().toString(36).slice(2, 7);
+let lastMinted = 0;
+
+/** A new revision for a change made here, at `t` or later. */
+export function mintRev(clientId: string, t: number): { rev: string; t: number } {
+  const at = Math.max(t, lastMinted + 1);
+  lastMinted = at;
+  return { rev: makeRev(at, `${clientId}-${WRITER}`), t: at };
+}
+
 export function revTime(rev: string): number {
   return parseInt(rev.split('.')[0], 36);
 }
@@ -357,8 +372,7 @@ export function recordLocal(meta: SyncMeta, changes: RecordChange[], now = Date.
   // One revision for the whole edit (revisions only need to be unique per record): the
   // clock then stays at the real edit time instead of running ahead by one per record,
   // so "the later edit" means the one actually made later.
-  const t = Math.max(now, meta.lastT + 1);
-  const rev = makeRev(t, meta.clientId);
+  const { rev, t } = mintRev(meta.clientId, Math.max(now, meta.lastT + 1));
   const revs = { ...meta.revs };
   const outbox = { ...meta.outbox };
   const bases = { ...meta.bases };
@@ -384,7 +398,11 @@ export function prepareSync(state: AppState, meta: SyncMeta, now = Date.now()): 
   const pending: Record<string, string> = { ...meta.outbox };
   // Never reconciled with anyone yet: everything this device has is new to the server.
   if (!meta.synced) {
-    for (const [id, r] of recs) if (!pending[id] && !isUntouchedDefault(r)) pending[id] = meta.revs[id] ?? makeRev(++t, meta.clientId);
+    for (const [id, r] of recs) {
+      if (pending[id] || isUntouchedDefault(r)) continue;
+      if (meta.revs[id]) pending[id] = meta.revs[id];
+      else ({ rev: pending[id], t } = mintRev(meta.clientId, t + 1));
+    }
   }
   const changes: SyncRecord[] = [];
   for (const [id, rev] of Object.entries(pending)) {
@@ -535,7 +553,9 @@ function rebase(w: Work, r: SyncRecord, rec: Rec | undefined) {
   if (rec) w.merged.set(r.id, rec);
   else w.merged.delete(r.id);
   if (!sameRec(before, rec)) w.changed = true;
-  const rev = makeRev(++w.t, w.clientId);
+  const m = mintRev(w.clientId, w.t + 1);
+  w.t = m.t;
+  const rev = m.rev;
   w.revs[r.id] = w.outbox[r.id] = rev;
   w.bases[r.id] = { rev: r.rev, data: r.deleted ? undefined : r.data, parent: r.parent };
 }
@@ -616,18 +636,29 @@ export function applyResponse(current: AppState, meta: SyncMeta, sent: SyncRecor
 export function reconcile(current: AppState, meta: SyncMeta, server: SyncResponse, now = Date.now()): Applied {
   const w = startWork(current, meta, now);
   const local = new Map(w.merged);
-  const fresh = () => makeRev(++w.t, w.clientId);
-  const onServer = new Set<string>();
+  const fresh = () => {
+    const m = mintRev(w.clientId, w.t + 1);
+    w.t = m.t;
+    return m.rev;
+  };
+  const refused = new Map((server.rejected ?? []).map((r) => [r.id, r.reason]));
+  const onServer = new Set(server.records.map((r) => r.id));
+  // First, what only this device has: queued as new. (Before looking at the server's
+  // records, so a plan deleted there still sees the new content this device put in it.)
+  for (const [id, r] of local) {
+    if (onServer.has(id) || isUntouchedDefault(r)) continue;
+    if (!w.outbox[id]) w.outbox[id] = w.revs[id] ??= fresh();
+    w.bases[id] = { rev: '' };
+  }
   for (const r of server.records) {
-    onServer.add(r.id);
     const known = w.outbox[r.id] ?? w.revs[r.id];
-    if (known === r.rev) {
+    if (known === r.rev && !refused.has(r.id)) {
       delete w.outbox[r.id]; // the server has exactly our version
       delete w.bases[r.id];
       continue;
     }
     if (w.outbox[r.id]) {
-      settle(w, r);
+      settle(w, r, refused.get(r.id));
       continue;
     }
     if (known && known > r.rev) {
@@ -648,18 +679,12 @@ export function reconcile(current: AppState, meta: SyncMeta, server: SyncRespons
     }
     incoming(w, r);
   }
-  for (const [id, r] of local) {
-    if (onServer.has(id) || w.outbox[id] || isUntouchedDefault(r)) continue;
-    w.outbox[id] = w.revs[id] ??= fresh(); // only here: upload it as new
-    w.bases[id] = { rev: '' };
-  }
+  // A pending deletion of something the server never had: nothing to tell it.
   for (const id of Object.keys(w.outbox)) {
-    if (onServer.has(id)) continue;
-    if (!w.merged.has(id)) {
-      // A pending deletion of something the server never had: nothing to tell it.
+    if (!onServer.has(id) && !w.merged.has(id)) {
       delete w.outbox[id];
       delete w.bases[id];
-    } else w.bases[id] = { rev: '' }; // new to this server
+    }
   }
   return finish(w, current, meta, { cursor: server.cursor, cursorTag: server.cursorTag }, server.records);
 }
@@ -697,12 +722,13 @@ export function migrateMeta(raw: unknown, state: AppState, now = Date.now()): Sy
   if (m.base && !m.revs) {
     const base = m.base;
     const recs = decompose(state);
-    let t = Math.max(now, meta.lastT);
+    // One revision for the whole set of unsent changes, as if made in one edit.
+    const { rev, t } = mintRev(meta.clientId, Math.max(now, meta.lastT + 1));
     for (const [id, r] of recs) {
       if (base[id] === undefined && isUntouchedDefault(r)) continue;
-      if (base[id] !== recHash(r)) meta.outbox[id] = meta.revs[id] = makeRev(++t, meta.clientId);
+      if (base[id] !== recHash(r)) meta.outbox[id] = meta.revs[id] = rev;
     }
-    for (const id of Object.keys(base)) if (!recs.has(id)) meta.outbox[id] = meta.revs[id] = makeRev(++t, meta.clientId);
+    for (const id of Object.keys(base)) if (!recs.has(id)) meta.outbox[id] = meta.revs[id] = rev;
     meta.lastT = t;
     meta.synced = meta.cursor > 0 || Object.keys(base).length > 0;
   }

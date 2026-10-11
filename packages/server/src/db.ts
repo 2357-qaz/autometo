@@ -90,7 +90,11 @@ export function openDb(path: string): RecordDb {
    * the client gets the current version back and merges. Without one, last writer wins.
    */
   function decide(c: SyncRecord, cur: Row | undefined, structural = true): 'accept' | 'same' | Rejection['reason'] {
-    if (cur && cur.rev === c.rev) return 'same'; // a retry of something already applied
+    if (cur && cur.rev === c.rev) {
+      // A retry of something already applied — but only if it really is the same change.
+      const sameContent = !!cur.deleted === !!c.deleted && (c.deleted || cur.data === JSON.stringify(c.data ?? null)) && (cur.parent ?? undefined) === c.parent;
+      return sameContent ? 'same' : 'conflict';
+    }
     if (c.base === undefined) return !cur || cur.rev < c.rev ? 'accept' : 'conflict';
     if (cur && (everApplied.get(c.id, c.rev) as { x: number } | undefined)) return 'superseded';
     if ((cur?.rev ?? '') !== c.base) return 'conflict';

@@ -43,3 +43,10 @@
 | 重试活性 | 请求超时（即使底层 fetch 不理会中断）；失败后指数退避重试 | server `concurrent.test.ts`（hung request）；core `retry.test.ts` |
 | 同记录并发编辑 | 乐观并发（`base` 版本）+ 字段级三方合并 + 「同时编辑」提示与一键改用；删除 vs 修改保留修改 | core `sync.test.ts`（applying a response）；server `concurrent.test.ts` |
 | 孤儿内容 | 服务器拒绝 has-children / parent-deleted；客户端保留计划并提示 | core `sync.test.ts`；server `concurrent.test.ts` |
+
+## 复核补充
+
+| 问题 | 处理 | 测试 |
+|---|---|---|
+| 同一设备的多个窗口/进程同毫秒编辑会生成相同版本号，服务器把第二份当成重试丢弃 | 版本号带上每个窗口/进程自己的写入者标识，同一进程内时间严格递增；服务器只在版本号与内容都相同时才视为重试 | server `interleave.test.ts`（同毫秒两窗口、同版本不同内容） |
+| 全量对账上传被部分拒绝时，被拒绝且未被发回的记录被当成已同步 | 被拒记录不进服务器视图；拒绝原因传入对账；先登记本地独有记录再处理服务器记录；规划阶段产生的冲突提示带入最终结果 | server `interleave.test.ts`（字段冲突 / 父计划已删 / 计划有他端新内容，各在「拉取前」「拉取与上传之间」两种时序） |

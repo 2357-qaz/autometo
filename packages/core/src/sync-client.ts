@@ -381,13 +381,21 @@ export class SyncClient {
       this.set({ pending: prepared.request.changes.length });
       res = await callSync(cfg, this.request(prepared.request), this.opts.fetchImpl);
       if (res.reset) throw new SyncError('服务器数据在同步过程中发生了变化，请重试', 'server');
-      for (const c of prepared.request.changes) view.set(c.id, c); // accepted…
-      for (const r of res.records) view.set(r.id, r); // …unless the server answered with a newer one
+      const refused = new Set((res.rejected ?? []).map((r) => r.id));
+      // What the server applied is now its version; a refused change is NOT (it stays
+      // pending here, and whatever the server sent back about it is merged below).
+      for (const c of prepared.request.changes) if (!refused.has(c.id)) view.set(c.id, c);
+      for (const r of res.records) view.set(r.id, r);
     }
     // Merge into the CURRENT state: edits made meanwhile are newer than what the server
     // has and simply stay pending.
-    const out = reconcile(this.store.get(), this.metaFor(cfg), { cursor: res.cursor, cursorTag: res.cursorTag, records: [...view.values()] });
-    this.commit({ ...out, meta: { ...out.meta, synced: true } });
+    const out = reconcile(this.store.get(), this.metaFor(cfg), { cursor: res.cursor, cursorTag: res.cursorTag, records: [...view.values()], rejected: res === res0 ? undefined : res.rejected });
+    // Conflicts already settled while planning the upload (on the snapshot) must still be
+    // reported: the final merge then sees the already-merged result and finds nothing.
+    const planned = (plan.meta.conflicts ?? []).slice((meta0.conflicts ?? []).length);
+    const known = new Set((out.meta.conflicts ?? []).map((n) => `${n.at}:${n.id}`));
+    const conflicts = [...(out.meta.conflicts ?? []), ...planned.filter((n) => !known.has(`${n.at}:${n.id}`))].slice(-50);
+    this.commit({ ...out, meta: { ...out.meta, synced: true, conflicts } });
   }
 
   private async normalRound(cfg: SyncConfig): Promise<void> {
