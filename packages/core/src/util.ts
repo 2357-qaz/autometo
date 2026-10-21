@@ -25,6 +25,14 @@ export function fmtDuration(ms: number): string {
   return `${sec}s`;
 }
 
+/** A span of time at review granularity: "2h 5m", "40m", "<1m". */
+export function fmtSpan(ms: number): string {
+  const m = Math.round(ms / 60_000);
+  if (m < 1) return ms > 0 ? '<1m' : '0m';
+  const h = Math.floor(m / 60);
+  return h ? (m % 60 ? `${h}h ${m % 60}m` : `${h}h`) : `${m}m`;
+}
+
 export function fmtAgo(t: number, now = Date.now()): string {
   const d = now - t;
   if (d < 60_000) return '刚刚';

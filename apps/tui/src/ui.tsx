@@ -14,6 +14,7 @@ import {
   pickSpec,
   type PickKind,
   COMMANDS,
+  generateReview,
   currentWs,
   execute,
   fmtAgo,
@@ -38,7 +39,7 @@ import {
   type SyncStatus,
   type Workspace,
 } from '@automedo/core';
-import { bar, C, displayWidth, dockLines, pad, effortSegs, eventLines, helpLines, historyBlocks, planDiffLines, tierSegs, welcomeLines, wsHeaderLines, type Line, type Seg } from './format';
+import { bar, C, displayWidth, dockLines, pad, effortSegs, eventLines, helpLines, historyBlocks, planDiffLines, reviewLines, tierSegs, welcomeLines, wsHeaderLines, type Line, type Seg } from './format';
 import { formFor, type Field, type FormSpec, type SubmitResult, type Values } from './forms';
 import { editLine, emptyLine, lineFrom, type LineState } from './lineedit';
 
@@ -587,6 +588,7 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
 
   const open = (i: Intent) => {
     if (i.type === 'help') return print(helpLines(COMMANDS));
+    if (i.type === 'review') return print(reviewLines(generateReview(store.get(), i.offset)));
     if (i.type === 'resume') {
       const c = store.get().compacts.find((x) => x.id === i.compactId);
       if (!c) return print([[{ t: '  ⎿  快照不存在', c: C.red }]]);

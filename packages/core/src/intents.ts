@@ -13,6 +13,8 @@ export type Intent =
   | { type: 'resume'; compactId: string }
   | { type: 'editTask'; taskId: string }
   | { type: 'help' }
+  /** Weekly review; offset 0 = this week, -1 = last week, … */
+  | { type: 'review'; offset: number }
   | { type: 'sync' }
   | { type: 'switch' }
   /** Pick one value (model tier, effort, fatigue) — see pickSpec. */

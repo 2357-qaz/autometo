@@ -25,7 +25,7 @@ npm install -g ./apps/tui            # 全局安装 automedo 命令
 
 - `automedo`：交互界面。历史写进终端自己的滚动区，底部是当前任务 + 编号 Todo、输入框和状态行；
   `shift+tab` 切换模式，`ctrl+o` 切换/删除 Plan 与 Goal，`ctrl+f` 专注，`ctrl+n` 完成并下一个，`ctrl+z` 撤销，`?` 帮助。
-- 子命令适合脚本和快速记录：`automedo add 买咖啡豆`、`automedo done 3`、`automedo next`、`automedo status`、`automedo diff`、`automedo log`、`automedo session 45 写文章页`、`automedo end`；也可以执行任意斜杠命令，如 `automedo defer 3 等配色`。
+- 子命令适合脚本和快速记录：`automedo add 买咖啡豆`、`automedo done 3`、`automedo next`、`automedo status`、`automedo diff`、`automedo log`、`automedo session 45 写文章页`、`automedo end`、`automedo review --md`（周回顾输出为 Markdown，可以存进笔记）；也可以执行任意斜杠命令，如 `automedo defer 3 等配色`。
 - Compact 快照可以在表单里按 `e` 用 `$EDITOR` 编辑。
 - 交互界面开着时用子命令改数据，界面会自动刷新；配置了同步时，子命令执行前后都会同步。
 
@@ -93,6 +93,19 @@ AUTOMEDO_TOKEN=$(openssl rand -base64 32) AUTOMEDO_WEB_DIR=apps/web/dist npm run
 
 `/compact`（或结束 Session 时勾选）按规则生成 Markdown 工作快照：进度、当前阶段、进行中/阻塞/下一步、今日投入、最近动态，以及留给自己的「恢复时先做」。快照可编辑，不依赖 LLM。下次打开应用时，顶部会出现 Resume 提示。
 
+## 周回顾
+
+`/review` 回顾本周（周一 00:00 起），`/review last` 看上周，`/review -2` 再往前。全部按规则从日志与 Session 统计，不依赖 LLM：
+
+- **概览**：完成数、专注时长、Token、有投入的天数，并和前一周比较
+- **值得注意**：反复延期的任务、范围扩大（新增远多于完成）、累的时候仍用掉大部分预算、超预算的天数、Session 普遍超时、Checkpoint 偏离等
+- **每天**：专注、Token 条（竖线为每日预算，超出标红）、当天最高疲劳、完成数
+- **计划与目标**：各自的投入与完成项
+- **偏离与修正**：本周的延期 / 修订 / 阻塞 / 跳过及其原因
+- **投入方式**：各档位时长，Session 实际用时 / 计划
+
+网页版可以用 ‹ › 翻周，「复制 Markdown」放进笔记。
+
 ## 键盘
 
 `/` 命令行（带补全）· `Shift+Tab` 切换模式 · `o` 打开 Plan/Goal 列表 · `r` Resume · `j/k` 选择任务 · `Space` 切换状态 · `s/d/b` 开始/完成/阻塞 · `e` 编辑 · `x` 删除 · `J/K` 移动 · `[ ]` 切换 Plan/Goal · `n` 新建 · `f` Session · `c` Compact · `Ctrl+Z` 撤销 · `?` 帮助
@@ -111,6 +124,7 @@ packages/core/    业务核心（不依赖 UI 与存储，供 Web / TUI / Server
   src/ops.ts        领域操作（计划/阶段/任务/目标/Checkpoint/Session），每次变更写入结构化事件
   src/diff.ts       Plan Diff：版本 vs 实际执行、首次偏离
   src/compact.ts    规则生成快照
+  src/review.ts     规则生成周回顾
   src/hie.ts        Human Inference Engine 计算
   src/commands.ts   斜杠命令；需要表单时发出 Intent，由各客户端呈现
   src/sync.ts       记录级同步：拆分/重组、变更检测、合并
