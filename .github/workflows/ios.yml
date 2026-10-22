@@ -38,9 +38,11 @@ jobs:
         working-directory: apps/mobile
         run: |
           brew install xcodegen
+          # copy: the web app and its config (sources of the project); update: the
+          # plugins' Package.swift, which reads the generated project.
+          npx cap copy ios
           (cd ios/App && xcodegen generate)
-          # After the project exists: sync reads it to write CapApp-SPM/Package.swift.
-          npx cap sync ios
+          npx cap update ios
 
       - name: Build (unsigned)
         working-directory: apps/mobile/ios/App
