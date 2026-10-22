@@ -1,0 +1,118 @@
+name: iOS native
+
+# The SwiftUI app (apps/native): its engine (core in JavaScriptCore) is built, the bridge
+# is tested in the simulator, screenshots of the main screens are taken there (demo data),
+# and an unsigned Tomo.ipa is built for sideloading (see apps/native/README.md).
+# macOS minutes are costly: runs when the native app or the shared widget code changes,
+# or by hand (Actions → iOS native → Run workflow) to pick up core changes.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'apps/native/**'
+      - '!apps/native/**/*.md'
+      - 'apps/mobile/ios/App/Shared/**'
+      - 'apps/mobile/ios/App/Widget/**'
+      - 'apps/mobile/ios/App/App/SessionActivityController.swift'
+      - '.github/workflows/native.yml'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  app:
+    runs-on: macos-26
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and test the engine
+        run: npm test -w @automedo/native
+
+      - name: Generate the Xcode project
+        working-directory: apps/native/ios
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Pick and boot a simulator
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = [d for runtime, ds in json.load(sys.stdin)["devices"].items() if "iOS" in runtime for d in ds if d["name"].startswith("iPhone")]
+          pro = [d for d in devices if d["name"].endswith(" Pro")]
+          print((pro or devices)[-1]["udid"])')
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          xcrun simctl list devices | grep "$UDID"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+
+      - name: Test the bridge (simulator)
+        working-directory: apps/native/ios
+        run: |
+          xcodebuild -version
+          xcodebuild test -project AuTomeDoNative.xcodeproj -scheme AuTomeDo \
+            -destination "id=${{ steps.sim.outputs.udid }}" -derivedDataPath build -quiet
+
+      - name: Screenshots (simulator, demo data)
+        working-directory: apps/native/ios
+        run: |
+          UDID=${{ steps.sim.outputs.udid }}
+          xcrun simctl ui "$UDID" appearance dark
+          xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState charged --batteryLevel 100 --wifiBars 3 --cellularBars 4 || true
+          xcrun simctl install "$UDID" build/Build/Products/Debug-iphonesimulator/AuTomeDo.app
+          mkdir -p shots
+          for screen in home fable split timeline review switcher command; do
+            xcrun simctl launch --terminate-running-process "$UDID" app.automedo.native -AutomedoDemo -AutomedoScreen "$screen"
+            sleep 7
+            xcrun simctl io "$UDID" screenshot "shots/$screen.png"
+          done
+          xcrun simctl spawn "$UDID" log show --last 3m --predicate 'eventMessage CONTAINS "[engine"' --style compact > shots/engine-log.txt || true
+          ls -la shots
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Tomo-screenshots-${{ github.run_number }}
+          path: apps/native/ios/shots
+          retention-days: 30
+
+      - name: Build for devices (unsigned)
+        working-directory: apps/native/ios
+        run: |
+          xcodebuild -project AuTomeDoNative.xcodeproj -scheme AuTomeDo -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build-device \
+            CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=${{ github.run_number }} -quiet build
+
+      # Ad-hoc signatures carrying the entitlements, so the signing tool knows the app and
+      # its widget share an App Group (it registers one for the user's own Apple ID).
+      - name: Package the IPA
+        working-directory: apps/native/ios
+        run: |
+          APP=build-device/Build/Products/Release-iphoneos/AuTomeDo.app
+          if [ -d "$APP/Frameworks" ]; then
+            find "$APP/Frameworks" -maxdepth 1 \( -name '*.framework' -o -name '*.dylib' \) -exec codesign --force --sign - {} \;
+          fi
+          codesign --force --sign - --entitlements Widget/Widget.entitlements "$APP/PlugIns/TomoWidget.appex"
+          codesign --force --sign - --entitlements AuTomeDo/AuTomeDo.entitlements "$APP"
+          test -f "$APP/engine.js"
+          mkdir -p ipa/Payload
+          cp -R "$APP" ipa/Payload/
+          (cd ipa && zip -qry ../Tomo.ipa Payload)
+          ls -lh Tomo.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tomo-ipa-${{ github.run_number }}
+          path: apps/native/ios/Tomo.ipa
+          retention-days: 30

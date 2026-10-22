@@ -14,6 +14,9 @@ enum Theme {
     static let yellow = Color(hex: 0xE5B85C)
     static let violet = Color(hex: 0xA68CF2)
     static let pink = Color(hex: 0xE38FB7)
+    static let teal = Color(hex: 0x4FB3A6)
+    static let blue = Color(hex: 0x7AA7E0)
+    static let link = Color(hex: 0xE9A283)
 
     static func tier(_ tier: String) -> Color {
         switch tier {

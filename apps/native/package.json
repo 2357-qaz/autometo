@@ -1,0 +1,15 @@
+{
+  "name": "@automedo/native",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Native SwiftUI iOS app; its logic is @automedo/core running in JavaScriptCore",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc -p .",
+    "test": "node build.mjs && vitest run"
+  },
+  "dependencies": {
+    "@automedo/core": "*"
+  }
+}

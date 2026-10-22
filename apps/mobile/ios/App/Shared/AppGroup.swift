@@ -9,7 +9,8 @@ import Foundation
 /// 3. otherwise (Xcode with a team of one's own) the declared name.
 /// The app and the widget each read their own bundle, which the signer treats alike.
 enum AppGroup {
-    static let declared = "group.app.automedo.ios"
+    /// The group as declared in the entitlements; each app (and its widget) names it in Info.plist.
+    static let declared = Bundle.main.object(forInfoDictionaryKey: "AutomedoAppGroup") as? String ?? "group.app.automedo.ios"
 
     static let id: String = {
         if let groups = Bundle.main.object(forInfoDictionaryKey: "ALTAppGroups") as? [String], let first = groups.first {
