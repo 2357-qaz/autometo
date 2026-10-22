@@ -4,6 +4,7 @@
 import type { AppState, Checkpoint, DiffLine, Effort, Goal, LogEntry, Plan, PlanVersion, Session, Task, TaskStatus, Tier, Workspace } from './types';
 import { activeSession, fatigueMult, focusedMsBetween, latestFatigue, onThisDevice, otherSessions, sessionTokens, tokensBetween, TIERS } from './hie';
 import { activeGoal, activePlan, currentWs, findWs } from './state';
+import { hashData } from './sync';
 import { DAY, uid } from './util';
 
 export class UserError extends Error {}
@@ -536,7 +537,6 @@ export function setTaskStatus(d: AppState, taskId: string, status: TaskStatus, n
     const rest = ws.tasks.filter((t) => t.phaseId === task.phaseId && open(t));
     if (ph && ph.status !== 'done' && rest.length === 0) msg += `　·　阶段「${ph.title}」任务已清空，可 /phase done 结束本阶段`;
   }
-  syncLanes(d);
   return [...pre, [msg, ...post].join('　·　')].join('　→　');
 }
 
@@ -657,7 +657,6 @@ export function deleteTask(d: AppState, taskId: string): string {
     text: `- ${t.title}${kids.length ? `（连同 ${kids.length} 个子任务）` : ''}`,
     diff: [{ sign: '-', num: n, text: `☐ ${t.title}` }, ...kids.map(({ k, n }) => ({ sign: '-' as const, num: n, text: `☐ ${k.title}`, note: `↳ ${t.title}` }))],
   });
-  syncLanes(d);
   return `已删除：${t.title}${kids.length ? `（连同 ${kids.length} 个子任务）` : ''}`;
 }
 
@@ -869,12 +868,25 @@ export function setTier(d: AppState, tier: Tier): string {
   return `模型档位 → ${TIERS[tier].label}${pausedNote(paused)}`;
 }
 
-/** A Fable session is priced by the subtasks in progress: a change in their number starts a new segment. */
-function syncLanes(d: AppState) {
+/** Whether this device's Fable session is priced for a different number of lanes than are in progress. */
+export function lanesStale(d: AppState): boolean {
   const s = activeSession(d);
-  if (!s || s.tier !== 'fable') return;
+  return !!s && s.tier === 'fable' && (s.lanes ?? 1) !== laneCount(d);
+}
+
+/**
+ * A Fable session is priced by the subtasks in progress: a change in their number starts a
+ * new segment. Anything can change that number (starting, finishing, deferring or deleting
+ * tasks, phases or plans, edits from other devices), so the store runs this after every
+ * change instead of each operation having to remember it.
+ */
+export function syncLanes(d: AppState) {
+  if (!lanesStale(d)) return;
+  const s = activeSession(d)!;
   const n = laneCount(d);
-  if ((s.lanes ?? 1) !== n) splitSession(d, s, { lanes: n });
+  // Derived, not random: two processes of this device re-pricing after the same remote
+  // change create the same segment, so merging them keeps one running session, not two.
+  splitSession(d, s, { lanes: n }, `${s.runId.slice(0, 8)}${hashData([s.id, n])}`);
 }
 
 export function setEffort(d: AppState, effort: Effort): string {
@@ -885,9 +897,9 @@ export function setEffort(d: AppState, effort: Effort): string {
   return `推理强度 → ${effort}`;
 }
 
-function splitSession(d: AppState, s: Session, patch: Partial<Pick<Session, 'tier' | 'effort' | 'lanes'>>) {
+function splitSession(d: AppState, s: Session, patch: Partial<Pick<Session, 'tier' | 'effort' | 'lanes'>>, id = uid()) {
   const now = Date.now();
-  const next: Session = { ...s, ...patch, id: uid(), startedAt: now, endedAt: undefined, tokens: undefined, fatigue: undefined, outcome: undefined };
+  const next: Session = { ...s, ...patch, id, startedAt: now, endedAt: undefined, tokens: undefined, fatigue: undefined, outcome: undefined };
   if (next.lanes == null || next.tier !== 'fable') delete next.lanes;
   if (now - s.startedAt < 1000) {
     // Several changes in one go (e.g. starting a few subtasks): no empty segments.

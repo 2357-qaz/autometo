@@ -103,19 +103,22 @@ describe('Fable tier', () => {
   it('a Fable session is priced by the lanes in progress over time', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-22T09:00:00'));
-    const s = plan('fable');
-    ops.submitSplit(s, task(s, '写文章').id, answers('a；b；c', '1'));
-    ops.startSession(s, { intent: '写文章', plannedMin: 30, tier: 'fable', effort: 'medium' });
-    expect(activeSession(s)?.lanes).toBe(1);
+    const store = createStore(plan('fable'));
+    store.mutate('拆分', (d) => ops.submitSplit(d, task(d, '写文章').id, answers('a；b；c', '1')));
+    store.mutate('Session', (d) => ops.startSession(d, { intent: '写文章', plannedMin: 30, tier: 'fable', effort: 'medium' }));
+    expect(activeSession(store.get())?.lanes).toBe(1);
     vi.setSystemTime(new Date('2026-10-22T09:10:00'));
-    ops.setTaskStatus(s, task(s, 'b').id, 'active');
-    ops.setTaskStatus(s, task(s, 'c').id, 'active'); // same moment: one new segment, not two
+    store.mutate('开始', (d) => {
+      ops.setTaskStatus(d, task(d, 'b').id, 'active');
+      ops.setTaskStatus(d, task(d, 'c').id, 'active');
+    });
+    store.mutate('开始', (d) => ops.setTaskStatus(d, task(d, 'c').id, 'active')); // unchanged: no new segment
     vi.setSystemTime(new Date('2026-10-22T09:20:00'));
-    const run = activeSession(s)!.runId;
+    const s = store.get();
     expect(s.sessions.map((x) => x.lanes)).toEqual([1, 3]);
-    expect(runSegmentsTokens(s, run)).toBe(10 * 2000 + 10 * 4000);
-    ops.endSession(s, {});
-    expect(s.sessions.reduce((a, x) => a + (x.tokens ?? 0), 0)).toBe(60_000);
+    expect(runSegmentsTokens(s, activeSession(s)!.runId)).toBe(10 * 2000 + 10 * 4000);
+    store.mutate('结束', (d) => ops.endSession(d, {}));
+    expect(store.get().sessions.reduce((a, x) => a + (x.tokens ?? 0), 0)).toBe(60_000);
   });
 
   it('starting a Fable session also requires the task in progress to be split', () => {
@@ -188,5 +191,89 @@ describe('subtasks', () => {
     expect(ops.parseLanePick('2-3', 3)).toEqual([1, 2]);
     expect(ops.parseLanePick('全部', 2)).toEqual([0, 1]);
     expect(() => ops.parseLanePick('4', 3)).toThrow(/没有第 4 步/);
+  });
+});
+
+describe('a Fable session follows the lanes whatever stops them', () => {
+  // 3 lanes from 09:00; something happens at 09:10; priced up to 09:20.
+  function running() {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-22T09:00:00'));
+    const s = plan('fable');
+    ops.addPhase(s, '第二阶段');
+    ops.submitSplit(s, task(s, '写文章').id, answers('a；b；c', '全部'));
+    ops.startSession(s, { intent: '', plannedMin: 60, tier: 'fable', effort: 'medium' });
+    const store = createStore(s);
+    vi.setSystemTime(new Date('2026-10-22T09:10:00'));
+    const priced = () => {
+      vi.setSystemTime(new Date('2026-10-22T09:20:00'));
+      const d = store.get();
+      expect(activeSession(d)?.lanes).toBe(ops.laneCount(d));
+      return runSegmentsTokens(d, activeSession(d)!.runId);
+    };
+    return { store, priced };
+  }
+  const T = (title: string, d: AppState) => task(d, title).id;
+
+  it('deferring a running subtask', () => {
+    const { store, priced } = running();
+    store.mutate('延期', (d) => ops.deferTask(d, T('c', d)));
+    expect(priced()).toBe(10 * 4000 + 10 * 3000);
+  });
+
+  it('deferring the parent (its subtasks stop)', () => {
+    const { store, priced } = running();
+    store.mutate('延期', (d) => ops.deferTask(d, T('写文章', d)));
+    expect(priced()).toBe(10 * 4000 + 10 * 2000);
+  });
+
+  it('deleting the phase they are in', () => {
+    const { store, priced } = running();
+    store.mutate('删除阶段', (d) => ops.deletePhase(d, d.plans[0].phases[0].id));
+    expect(priced()).toBe(10 * 4000 + 10 * 2000);
+  });
+
+  it('deleting the plan', () => {
+    const { store, priced } = running();
+    store.mutate('删除', (d) => ops.deleteWs(d, d.plans[0].id));
+    expect(priced()).toBe(10 * 4000 + 10 * 2000);
+  });
+
+  it('another device finishing one of them (arrives by sync)', async () => {
+    const { store, priced } = running();
+    const remote = structuredClone(store.get());
+    Object.assign(task(remote, 'b'), { status: 'done', doneAt: Date.now() });
+    delete task(remote, 'b').activeBy;
+    store.applyExternal(remote);
+    await Promise.resolve();
+    expect(priced()).toBe(10 * 4000 + 10 * 3000);
+  });
+
+  it('undoing the start of a lane', () => {
+    const { store, priced } = running();
+    store.mutate('暂停', (d) => ops.setTaskStatus(d, T('c', d), 'pending'));
+    vi.setSystemTime(new Date('2026-10-22T09:15:00'));
+    store.mutate('开始任务', (d) => ops.setTaskStatus(d, T('c', d), 'active'));
+    store.undo();
+    expect(priced()).toBe(10 * 4000 + 10 * 3000);
+  });
+});
+
+describe('re-pricing after a remote change in two processes of one device', () => {
+  it('creates the same segment in both, so merging keeps a single running session', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-22T09:00:00'));
+    const s = plan('fable');
+    ops.submitSplit(s, task(s, '写文章').id, answers('a；b', '全部'));
+    ops.startSession(s, { intent: '', plannedMin: 60, tier: 'fable', effort: 'medium' });
+    vi.setSystemTime(new Date('2026-10-22T09:10:00'));
+    const [p1, p2] = [structuredClone(s), structuredClone(s)];
+    for (const d of [p1, p2]) {
+      Object.assign(task(d, 'b'), { status: 'done' }); // the same remote edit reaches both
+      ops.syncLanes(d);
+    }
+    expect(p1.sessions.map((x) => x.id)).toEqual(p2.sessions.map((x) => x.id));
+    const merged = compose(new Map([...decompose(p1), ...decompose(p2)]).values(), s.ui);
+    expect(merged.sessions.filter((x) => x.endedAt == null)).toHaveLength(1);
   });
 });
