@@ -3,7 +3,7 @@ import { describeUndo, type Store } from './store';
 import { activeGoal, activePlan, currentWs } from './state';
 import { activeSession, EFFORT_ORDER, otherSessions, TIER_ORDER } from './hie';
 import * as ops from './ops';
-import type { Effort, Tier } from './types';
+import type { AppState, Effort, Tier } from './types';
 
 export interface CmdCtx {
   store: Store;
@@ -31,8 +31,19 @@ export interface Command {
 const ok = (text: string, undoable = true): CmdResult => ({ text, undoable });
 
 function mut(ctx: CmdCtx, label: string, fn: Parameters<Store['mutate']>[1]): CmdResult {
-  const r = ctx.store.mutate(label, fn);
-  return ok(typeof r === 'string' ? r : label);
+  try {
+    const r = ctx.store.mutate(label, fn);
+    return ok(typeof r === 'string' ? r : label);
+  } catch (e) {
+    if (!(e instanceof ops.SplitRequired)) throw e;
+    ctx.open(splitIntent(e, label, fn));
+    return { text: `${e.message}：先回答几个问题`, undoable: false };
+  }
+}
+
+/** The split questions for a task Fable refused to start; answering them reruns `fn`. */
+export function splitIntent(e: ops.SplitRequired, label: string, fn: (d: AppState) => unknown): Intent {
+  return { type: 'split', taskId: e.taskId, label, retry: fn };
 }
 
 export const COMMANDS: Command[] = [
@@ -78,9 +89,23 @@ export const COMMANDS: Command[] = [
         return `已添加 #${ops.orderedTasks(ops.requireWs(d)).findIndex((x) => x.id === t.id) + 1}：${t.title}`;
       }),
   },
-  { name: 'start', args: '[#n]', desc: '开始执行任务（同时只有一个进行中）', run: (a, c) => mut(c, '开始任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a || firstPending(d), d).id, 'active')) },
+  { name: 'start', args: '[#n]', desc: '开始执行任务（同时一个进行中；Fable 档可并行推进子任务）', run: (a, c) => mut(c, '开始任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a || firstPending(d), d).id, 'active')) },
   { name: 'done', args: '[#n]', desc: '完成任务（默认当前进行中）', run: (a, c) => mut(c, '完成任务', (d) => ops.setTaskStatus(d, ops.resolveTask(ops.requireWs(d), a, d).id, 'done')) },
   { name: 'next', desc: '完成当前任务并开始下一个', run: (_, c) => mut(c, '下一个任务', (d) => ops.nextTask(d)) },
+  {
+    name: 'split',
+    args: '[#n]',
+    desc: '把任务拆成子任务（回答几个问题；Fable 档开始未拆分的任务时会先问）',
+    run: (a, c) => {
+      const s = c.store.get();
+      const ws = currentWs(s);
+      if (!ws) return { text: '当前没有打开的 Plan/Goal', error: true };
+      const t = ops.resolveTask(ws, a, s);
+      if (ops.parentOf(ws, t)) return { text: '子任务不再继续拆分', error: true };
+      if (t.status === 'done' || t.status === 'skipped') return { text: '已结束的任务不需要拆分', error: true };
+      c.open({ type: 'split', taskId: t.id });
+    },
+  },
   {
     name: 'block',
     args: '[#n] [原因]',
@@ -203,12 +228,12 @@ export const COMMANDS: Command[] = [
   },
   {
     name: 'model',
-    args: '[haiku|sonnet|opus]',
+    args: '[haiku|sonnet|opus|fable]',
     desc: '切换模型档位（不带参数则弹出选择）',
     run: (a, c) => {
       if (!a.trim()) return void c.open({ type: 'pick', what: 'tier' });
       const t = a.trim().toLowerCase() as Tier;
-      if (!TIER_ORDER.includes(t)) return { text: `未知档位「${a}」。可选：haiku / sonnet / opus`, error: true };
+      if (!TIER_ORDER.includes(t)) return { text: `未知档位「${a}」。可选：haiku / sonnet / opus / fable`, error: true };
       return mut(c, '切换档位', (d) => ops.setTier(d, t));
     },
   },

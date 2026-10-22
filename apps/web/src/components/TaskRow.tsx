@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { Task, TaskStatus } from '@automedo/core';
 import { useApp } from '../ctx';
-import { ops } from '@automedo/core';
+import { currentWs, ops } from '@automedo/core';
 import { InlineEdit } from './Inline';
 
 export const GLYPH: Record<TaskStatus, string> = {
@@ -15,7 +15,11 @@ export const GLYPH: Record<TaskStatus, string> = {
 const SWIPE = 72; // px past which a swipe commits
 
 export function TaskRow({ task, num, selected, onSelect, dim }: { task: Task; num: number; selected: boolean; onSelect: () => void; dim?: boolean }) {
-  const { act, open } = useApp();
+  const { act, open, state } = useApp();
+  const ws = currentWs(state);
+  const sub = !!ws && !!ops.parentOf(ws, task);
+  const kids = ws && !sub ? ops.childrenOf(ws, task.id) : [];
+  const kidsDone = kids.filter((t) => t.status === 'done' || t.status === 'skipped').length;
   const [dx, setDx] = useState(0);
   const drag = useRef<{ x: number; y: number; id: number; horizontal: boolean | null } | null>(null);
   const done = task.status === 'done';
@@ -25,6 +29,7 @@ export function TaskRow({ task, num, selected, onSelect, dim }: { task: Task; nu
     defer: () => act('延期', (d) => ops.deferTask(d, task.id)),
     block: () => act('标记阻塞', (d) => ops.setTaskStatus(d, task.id, 'blocked')),
     edit: () => open({ type: 'editTask', taskId: task.id }),
+    split: () => open({ type: 'split', taskId: task.id }),
     remove: () => act('删除任务', (d) => ops.deleteTask(d, task.id)),
   };
 
@@ -64,7 +69,7 @@ export function TaskRow({ task, num, selected, onSelect, dim }: { task: Task; nu
   const swipe = dx <= -SWIPE ? 'commit-done' : dx >= SWIPE ? 'commit-defer' : dx < 0 ? 'to-done' : dx > 0 ? 'to-defer' : '';
 
   return (
-    <div className={`task-wrap ${swipe}`} data-swipe-hint={dx < 0 ? '✓ 完成' : dx > 0 ? '↷ 延期' : undefined}>
+    <div className={`task-wrap ${sub ? 'sub' : ''} ${swipe}`} data-swipe-hint={dx < 0 ? '✓ 完成' : dx > 0 ? '↷ 延期' : undefined}>
       <div
         className={`task st-${task.status} ${selected ? 'sel' : ''} ${dim ? 'later' : ''}`}
         data-task-id={task.id}
@@ -85,7 +90,8 @@ export function TaskRow({ task, num, selected, onSelect, dim }: { task: Task; nu
         </button>
         <div className="body">
           <InlineEdit className="label" value={task.title} ariaLabel="任务标题" onSave={(v) => act('编辑任务', (d) => ops.updateTask(d, task.id, { title: v }))} />
-          {task.note && <span className="note"> — {task.note}</span>}
+          {kids.length > 0 && <span className="steps"> {kidsDone}/{kids.length} 步</span>}
+          {task.note && <span className="note"> — {task.note.split('\n').join('；')}</span>}
         </div>
         <div className="tools">
           <span className="faint num">#{num}</span>
@@ -97,6 +103,9 @@ export function TaskRow({ task, num, selected, onSelect, dim }: { task: Task; nu
           )}
           {!done && (
             <button className="icon-btn" title="延期到下一阶段" onClick={actions.defer}>↷</button>
+          )}
+          {!sub && !done && task.status !== 'skipped' && (
+            <button className="icon-btn" title="拆成子任务（/split）" onClick={actions.split}>✂︎</button>
           )}
           <button className="icon-btn" title="详情 / 备注 / 阶段 (e)" onClick={actions.edit}>✎</button>
           <button className="icon-btn danger" title="删除 (x)，可撤销" onClick={actions.remove}>⌫</button>
@@ -110,6 +119,7 @@ export function TaskRow({ task, num, selected, onSelect, dim }: { task: Task; nu
           {!done && <button className="btn" onClick={actions.defer}>↷ 延期</button>}
           {!done && task.status !== 'blocked' && <button className="btn" onClick={actions.block}>✗ 阻塞</button>}
           {done && <button className="btn" onClick={() => act('重新打开', (d) => ops.setTaskStatus(d, task.id, 'pending'))}>↺ 重新打开</button>}
+          {!sub && !done && task.status !== 'skipped' && <button className="btn" onClick={actions.split}>✂︎ 拆分</button>}
           <button className="btn" onClick={actions.edit}>✎ 编辑</button>
           <button className="btn danger" onClick={actions.remove}>⌫ 删除</button>
         </div>

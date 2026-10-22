@@ -168,7 +168,12 @@ async function oneShot(argv: string[]) {
     const n0 = ws?.log.length ?? 0;
     const ctx: CmdCtx = {
       store,
-      open: (i) => fail(i.type === 'help' ? USAGE : `「${cmd}」需要交互输入，请在界面里使用：automedo`),
+      open: (i) =>
+        fail(
+          i.type === 'help' ? USAGE
+          : i.type === 'split' ? 'Fable 档要先把任务拆成子任务：请在界面里回答拆分问题（automedo，然后 /split）'
+          : `「${cmd}」需要交互输入，请在界面里使用：automedo`,
+        ),
       exportData: () => process.stdout.write(JSON.stringify(store.get(), null, 2) + '\n'),
       importData: () => fail('用法：automedo import <文件>'),
       showDiff: (planId, v) => out(planDiffLines(store.get().plans.find((p) => p.id === planId)!, v)),

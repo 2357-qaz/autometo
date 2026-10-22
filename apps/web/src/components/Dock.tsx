@@ -19,7 +19,12 @@ export function Dock({ ws, sel, setSel }: { ws: Workspace; sel: string | null; s
   const active = ops.currentTask(ws, state);
   const elsewhere = ops.otherActiveTasks(ws, state);
   const phase = ws.kind === 'plan' ? ops.currentPhase(ws) : undefined;
-  const open_ = ordered.filter((t) => t.status !== 'done' && t.status !== 'skipped' && t.id !== active?.id && !elsewhere.includes(t));
+  const unfinished = (t: (typeof ordered)[number]) => t.status !== 'done' && t.status !== 'skipped';
+  // The subtasks of the task in progress are listed right under it, all of them.
+  const kids = active ? ops.childrenOf(ws, active.id) : [];
+  const openKids = kids.filter(unfinished);
+  const lanes = openKids.filter((t) => t.status === 'active').length;
+  const open_ = ordered.filter((t) => unfinished(t) && t.id !== active?.id && !elsewhere.includes(t) && !openKids.includes(t));
   // Current phase first, later phases after.
   const now = phase ? open_.filter((t) => t.phaseId === phase.id) : open_;
   const later = phase ? open_.filter((t) => t.phaseId !== phase.id) : [];
@@ -32,6 +37,8 @@ export function Dock({ ws, sel, setSel }: { ws: Workspace; sel: string | null; s
     <div className={`dock-active ${sel === active.id ? 'sel' : ''}`} data-task-id={active.id} onMouseDown={() => setSel(active.id)}>
       <span className="accent">◼</span>
       <span className="title">{active.title}</span>
+      {kids.length > 0 && <span className="dim">{kids.length - openKids.length}/{kids.length} 步</span>}
+      {lanes > 1 && <span className="pink">并行 {lanes} 路</span>}
       <span className="dock-btns">
         <button className="btn primary" onClick={() => run('/next')}>✓ 完成{nextT ? '并继续' : ''}</button>
         {!sess && <button className="btn" onClick={() => run('/session')}>✻ 专注</button>}
@@ -80,6 +87,9 @@ export function Dock({ ws, sel, setSel }: { ws: Workspace; sel: string | null; s
       <span className="elbow">⎿</span>
       <div className="dock-list">
         {head}
+        {openKids.map((t) => (
+          <TaskRow key={t.id} task={t} num={num(t.id)} selected={sel === t.id} onSelect={() => setSel(t.id)} />
+        ))}
         {elsewhere.map((t) => (
           <div key={t.id} className="dock-elsewhere" data-task-id={t.id}>
             <span className="violet">◆</span> <span>{t.title}</span> <span className="faint">#{num(t.id)}</span> <span className="violet">另一台设备进行中</span>

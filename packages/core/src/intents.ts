@@ -12,6 +12,11 @@ export type Intent =
   | { type: 'compact'; wsId: string }
   | { type: 'resume'; compactId: string }
   | { type: 'editTask'; taskId: string }
+  /**
+   * Split a task into subtasks (the questions Fable asks). `retry` is the operation Fable
+   * refused until the task was split: it runs again, in the same edit, after the split.
+   */
+  | { type: 'split'; taskId: string; label?: string; retry?: (d: import('./types').AppState) => unknown }
   | { type: 'help' }
   /** Weekly review; offset 0 = this week, -1 = last week, … */
   | { type: 'review'; offset: number }

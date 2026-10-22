@@ -15,6 +15,7 @@ import {
   generateCompact,
   ops,
   runSegmentsTokens,
+  splitIntent,
   TIER_ORDER,
   TIERS,
   type Effort,
@@ -24,6 +25,9 @@ import {
   type Tier,
   type Verdict,
 } from '@automedo/core';
+
+/** Fable's colour (same as TIER_COLOR.fable in format.ts). */
+const FABLE_COLOR = '#e38fb7';
 
 export interface Option {
   value: string;
@@ -57,12 +61,13 @@ export interface FormSpec {
 
 const str = (v: Values, k: string) => String(v[k] ?? '').trim();
 
-/** Run a store mutation, turning thrown UserErrors into a form error. */
+/** Run a store mutation, turning thrown UserErrors into a form error. Fable's split questions open next. */
 function mutate(store: Store, label: string, fn: Parameters<Store['mutate']>[1]): SubmitResult {
   try {
     const r = store.mutate(label, fn);
     return { text: typeof r === 'string' ? r : label };
   } catch (e) {
+    if (e instanceof ops.SplitRequired) return { text: `${e.message}：先回答几个问题`, next: splitIntent(e, label, fn) };
     return { error: (e as Error).message };
   }
 }
@@ -118,7 +123,7 @@ export function formFor(intent: Intent, store: Store, sync: SyncClient): FormSpe
         desc: `今天以什么档位工作？${ws ? `关联「${ws.title}」` : ''}${fatigueMult(latestFatigue(s)) > 1 ? `（疲劳 ${latestFatigue(s)}/5：token ×${fatigueMult(latestFatigue(s))}）` : ''}`,
         fields: [
           { kind: 'text', key: 'intent', label: '这次要做什么', initial: active?.title ?? (ws?.kind === 'goal' ? ws.nextAction : '') },
-          { kind: 'select', key: 'tier', label: '模型档位', initial: s.hie.tier, options: TIER_ORDER.map((t) => ({ value: t, label: `${TIERS[t].label} · ${TIERS[t].rate}/min`, hint: TIERS[t].hint })) },
+          { kind: 'select', key: 'tier', label: '模型档位', initial: s.hie.tier, options: TIER_ORDER.map((t) => ({ value: t, label: `${TIERS[t].label} · ${TIERS[t].rate}/min${TIERS[t].lane ? ` · 每多一路 +${TIERS[t].lane}` : ''}`, hint: TIERS[t].hint })) },
           { kind: 'select', key: 'effort', label: '推理强度', initial: s.hie.effort, options: EFFORT_ORDER.map((e) => ({ value: e, label: `${e} ×${EFFORTS[e].mult}`, hint: EFFORTS[e].hint })) },
           { kind: 'text', key: 'minutes', label: '计划时长（分钟）', initial: String(intent.minutes ?? 25) },
         ],
@@ -152,6 +157,29 @@ export function formFor(intent: Intent, store: Store, sync: SyncClient): FormSpe
           if (!r.error && v.compact && cur.wsId) r.next = { type: 'compact', wsId: cur.wsId };
           return r;
         },
+      };
+    }
+    case 'split': {
+      const ws = currentWs(s);
+      const t = ws && ops.taskList(ws).find((x) => x.id === intent.taskId);
+      if (!ws || !t) return null;
+      const had = ops.childrenOf(ws, t.id).length;
+      return {
+        title: `拆分「${t.title}」`,
+        color: FABLE_COLOR,
+        desc: intent.retry
+          ? 'Fable 先拆分再动手：回答这几个问题，然后继续刚才的操作。'
+          : had ? `已有 ${had} 个子任务，新写的步骤接在后面。` : '把任务拆成能分头推进的几步。',
+        fields: [
+          { kind: 'text', key: 'doneWhen', label: '① 做完是什么样？', placeholder: '完成标准，越具体越好', required: true },
+          { kind: 'text', key: 'steps', label: '② 拆成哪几步？', placeholder: '用 ；分隔，至少 2 步', required: true },
+          { kind: 'text', key: 'start', label: '③ 哪几步现在就并行开始？', initial: intent.retry ? '1' : '', placeholder: '编号，如 1 2；「全部」；留空先不开始' },
+          { kind: 'text', key: 'risk', label: '④ 最大的不确定 / 风险是什么？', placeholder: '可选' },
+        ],
+        submit: (v) =>
+          mutate(store, intent.label ?? '拆分任务', (d) =>
+            ops.submitSplit(d, t.id, { doneWhen: str(v, 'doneWhen'), steps: ops.splitSteps(str(v, 'steps')), risk: str(v, 'risk'), start: str(v, 'start') }, intent.retry),
+          ),
       };
     }
     case 'revise': {

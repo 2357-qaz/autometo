@@ -4,6 +4,7 @@
 // Every local edit is also described at record level (see sync.ts): sync stamps those
 // changes with revisions, and undo reverts exactly the records an edit touched — never
 // whatever arrived from other devices in the meantime.
+import { lanesStale, syncLanes } from './ops';
 import { compose, decompose, diffRecords, sameRec, type Rec, type RecordChange } from './sync';
 import type { AppState } from './types';
 
@@ -118,11 +119,12 @@ export function createStore(initial: AppState, persist?: PersistAdapter, debounc
     if (undo.length > UNDO_LIMIT) undo.shift();
   };
 
-  return {
+  const store: Store = {
     get: () => state,
     mutate(label, fn) {
       const draft = structuredClone(state);
       const r = fn(draft);
+      syncLanes(draft); // part of the same edit (and of its undo)
       const ui = state.ui;
       const changes = commitLocal(draft);
       if (label) pushUndo({ label, changes, ui });
@@ -136,6 +138,9 @@ export function createStore(initial: AppState, persist?: PersistAdapter, debounc
       state = next;
       recs = decompose(next);
       listeners.forEach((l) => l());
+      // Another device stopped (or started) one of this device's subtasks: re-price this
+      // device's Fable session as a local edit of its own, once the merge is done.
+      if (lanesStale(state)) queueMicrotask(() => lanesStale(state) && store.mutate(null, () => {}));
     },
     undo() {
       const e = undo.pop();
@@ -154,8 +159,11 @@ export function createStore(initial: AppState, persist?: PersistAdapter, debounc
         undone++;
       }
       const ui = { ...e.ui, lastSeenAt: state.ui.lastSeenAt };
-      if (undone) commitLocal(compose(cur.values(), ui));
-      else if (!e.changes.length) set({ ...state, ui }, recs); // a UI-only step
+      if (undone) {
+        const next = compose(cur.values(), ui);
+        syncLanes(next); // a partly skipped undo can leave the lanes and the session apart
+        commitLocal(next);
+      } else if (!e.changes.length) set({ ...state, ui }, recs); // a UI-only step
       return { label: e.label, undone, skipped };
     },
     canUndo: () => undo.length > 0,
@@ -172,6 +180,7 @@ export function createStore(initial: AppState, persist?: PersistAdapter, debounc
       return save();
     },
   };
+  return store;
 }
 
 /** One line for the UI after an undo. */

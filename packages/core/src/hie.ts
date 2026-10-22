@@ -3,10 +3,12 @@
 import type { AppState, Effort, Session, Tier } from './types';
 import { startOfDay } from './util';
 
-export const TIERS: Record<Tier, { label: string; rate: number; hint: string }> = {
+/** `lane`: extra tokens per minute for each subtask beyond the first in progress in parallel. */
+export const TIERS: Record<Tier, { label: string; rate: number; lane?: number; hint: string }> = {
   haiku: { label: 'Haiku', rate: 400, hint: '轻量：回复消息、整理、杂事' },
   sonnet: { label: 'Sonnet', rate: 800, hint: '常规：日常推进、写作、编码' },
   opus: { label: 'Opus', rate: 1500, hint: '深度：难题、设计、需要整块专注' },
+  fable: { label: 'Fable', rate: 2000, lane: 1000, hint: '编排：先拆分任务，再并行推进子任务' },
 };
 
 export const EFFORTS: Record<Effort, { label: string; mult: number; hint: string }> = {
@@ -15,7 +17,7 @@ export const EFFORTS: Record<Effort, { label: string; mult: number; hint: string
   high: { label: 'high', mult: 1.5, hint: '全力以赴（think hard）' },
 };
 
-export const TIER_ORDER: Tier[] = ['haiku', 'sonnet', 'opus'];
+export const TIER_ORDER: Tier[] = ['haiku', 'sonnet', 'opus', 'fable'];
 export const EFFORT_ORDER: Effort[] = ['low', 'medium', 'high'];
 
 export const FATIGUE_LABELS = ['', '精力充沛', '状态不错', '一般', '有点累', '需要休息'];
@@ -27,18 +29,24 @@ export function fatigueMult(level: number | null | undefined): number {
   return FATIGUE_MULT[level ?? 0] ?? 1;
 }
 
-export function ratePerMin(tier: Tier, effort: Effort, fatigue?: number | null): number {
-  return TIERS[tier].rate * EFFORTS[effort].mult * fatigueMult(fatigue);
+/** Base tokens per minute of a tier; Fable adds `lane` for every parallel subtask beyond the first. */
+export function tierRate(tier: Tier, lanes = 1): number {
+  const t = TIERS[tier];
+  return t.rate + (t.lane ?? 0) * Math.max(0, lanes - 1);
+}
+
+export function ratePerMin(tier: Tier, effort: Effort, fatigue?: number | null, lanes = 1): number {
+  return tierRate(tier, lanes) * EFFORTS[effort].mult * fatigueMult(fatigue);
 }
 
 /**
  * Tokens of one session. An ended session's total was fixed when it ended (with the
  * fatigue that applied then); a running one is priced at the current fatigue.
  */
-export function sessionTokens(s: Pick<Session, 'tier' | 'effort' | 'startedAt' | 'endedAt' | 'tokens'>, now = Date.now(), fatigue?: number | null): number {
+export function sessionTokens(s: Pick<Session, 'tier' | 'effort' | 'startedAt' | 'endedAt' | 'tokens' | 'lanes'>, now = Date.now(), fatigue?: number | null): number {
   if (s.tokens != null) return s.tokens;
   const end = s.endedAt ?? now;
-  return Math.round(((end - s.startedAt) / 60_000) * ratePerMin(s.tier, s.effort, fatigue));
+  return Math.round(((end - s.startedAt) / 60_000) * ratePerMin(s.tier, s.effort, fatigue, s.lanes));
 }
 
 /** Tokens per minute a session is charged at: its fixed average once ended, else the live rate. */
@@ -47,7 +55,7 @@ function sessionRate(s: Session, fatigue: number | null): number {
     const mins = (s.endedAt - s.startedAt) / 60_000;
     return mins > 0 ? s.tokens / mins : 0;
   }
-  return ratePerMin(s.tier, s.effort, fatigue);
+  return ratePerMin(s.tier, s.effort, fatigue, s.lanes);
 }
 
 /** Each session's share of [from, to): focused time and tokens (running ones up to `now`). */
@@ -62,8 +70,8 @@ export function sessionUsage(state: Pick<AppState, 'sessions' | 'fatigue'>, from
   return out;
 }
 
-export function estimateTokens(tier: Tier, effort: Effort, minutes: number, fatigue?: number | null): number {
-  return Math.round(minutes * ratePerMin(tier, effort, fatigue));
+export function estimateTokens(tier: Tier, effort: Effort, minutes: number, fatigue?: number | null, lanes = 1): number {
+  return Math.round(minutes * ratePerMin(tier, effort, fatigue, lanes));
 }
 
 export function tokensToday(state: Pick<AppState, 'sessions' | 'fatigue'>, now = Date.now()): number {

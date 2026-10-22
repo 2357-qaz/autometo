@@ -2,7 +2,7 @@ export type Mode = 'plan' | 'goal';
 export type TaskStatus = 'pending' | 'active' | 'done' | 'blocked' | 'skipped';
 export type PhaseStatus = 'pending' | 'active' | 'done';
 export type WsStatus = 'active' | 'paused' | 'done' | 'archived';
-export type Tier = 'haiku' | 'sonnet' | 'opus';
+export type Tier = 'haiku' | 'sonnet' | 'opus' | 'fable';
 export type Effort = 'low' | 'medium' | 'high';
 export type Verdict = 'on-track' | 'drifting' | 'blocked' | 'pivot';
 
@@ -22,6 +22,7 @@ export type EventType =
   | 'reopen'
   | 'defer'
   | 'revise' // reasoned change → new plan version
+  | 'split' // task split into subtasks (Fable)
   | 'commit' // plan version snapshot (auto v1 or manual /commit)
   | 'note'
   | 'session-start'
@@ -76,6 +77,8 @@ export interface Task {
   doneAt?: number;
   /** Device working on it while active (several devices can each have one in progress). */
   activeBy?: string;
+  /** Set on subtasks: the task it was split from (one level only). */
+  parentId?: string;
 }
 
 export interface Phase {
@@ -142,6 +145,8 @@ export interface Session {
   outcome?: string;
   /** Device the session runs on; sessions on different devices run in parallel. */
   device?: string;
+  /** Fable: subtasks in progress in parallel during this segment (priced per lane). */
+  lanes?: number;
 }
 
 export interface Compact {

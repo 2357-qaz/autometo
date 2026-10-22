@@ -79,7 +79,7 @@ function migrateLog(log: unknown): LogEntry[] {
 }
 
 // Tier names changed from lite/core/deep to haiku/sonnet/opus.
-const TIER_ALIAS: Record<string, Tier> = { lite: 'haiku', core: 'sonnet', deep: 'opus', haiku: 'haiku', sonnet: 'sonnet', opus: 'opus' };
+const TIER_ALIAS: Record<string, Tier> = { lite: 'haiku', core: 'sonnet', deep: 'opus', haiku: 'haiku', sonnet: 'sonnet', opus: 'opus', fable: 'fable' };
 function migrateTier(t: unknown): Tier {
   return (typeof t === 'string' && TIER_ALIAS[t]) || 'sonnet';
 }

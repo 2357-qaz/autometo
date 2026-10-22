@@ -1,7 +1,7 @@
 // Rule-based context snapshot ("Compact"). No LLM involved.
 import type { AppState, Goal, Plan, Workspace } from './types';
 import { activeSession, latestFatigue, sessionTokens, TIERS } from './hie';
-import { checkpointDue, currentPhase, currentTask, nextCheckpointAt, orderedTasks, otherActiveTasks } from './ops';
+import { activeLanes, checkpointDue, currentPhase, currentTask, nextCheckpointAt, orderedTasks, otherActiveTasks } from './ops';
 import { diffPlan, diffSummary } from './diff';
 import { fmtDate, fmtTime, startOfDay } from './util';
 
@@ -32,7 +32,8 @@ function planLines(p: Plan, state: AppState): string[] {
   }
   const active = currentTask(p, state);
   out.push('', '## 我做到哪里');
-  out.push(active ? `- 进行中：#${tasks.indexOf(active) + 1} ${active.title}${active.note ? `（${active.note}）` : ''}` : '- 没有进行中的任务');
+  out.push(active ? `- 进行中：#${tasks.indexOf(active) + 1} ${active.title}${active.note ? `（${active.note.split('\n').join('；')}）` : ''}` : '- 没有进行中的任务');
+  for (const t of activeLanes(p, state)) out.push(`  - 并行子任务：#${tasks.indexOf(t) + 1} ${t.title}`);
   for (const t of otherActiveTasks(p, state)) out.push(`- 另一台设备进行中：#${tasks.indexOf(t) + 1} ${t.title}`);
   const lastDone = tasks.filter((t) => t.status === 'done' && t.doneAt).sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)).slice(0, 3);
   for (const t of lastDone) out.push(`- 已完成：${t.title}`);

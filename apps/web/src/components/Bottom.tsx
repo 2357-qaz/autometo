@@ -4,6 +4,7 @@ import { useApp } from '../ctx';
 import { matchCommands, needsArg } from '@automedo/core';
 import { activeSession, fatigueMult, latestFatigue, otherSessions, runSegmentsTokens, runStartedAt, TIERS, type BudgetLevel } from '@automedo/core';
 import { currentWs } from '@automedo/core';
+import { ops } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
 import { useSyncStatus } from '../sync';
 import { fmtAgo } from '@automedo/core';
@@ -36,7 +37,7 @@ function SpinnerLine() {
       <span className="glyph">{GLYPHS[tick % GLYPHS.length]}</span>
       <span>{verb}…</span>
       <span className="dim">
-        ({fmtDuration(elapsed)} / {s.plannedMin}m · ↑ {fmtTokens(runSegmentsTokens(state, s.runId))} tokens · <TierLabel tier={s.tier} /> <EffortLabel effort={s.effort} />
+        ({fmtDuration(elapsed)} / {s.plannedMin}m · ↑ {fmtTokens(runSegmentsTokens(state, s.runId))} tokens · <TierLabel tier={s.tier} lanes={s.lanes} /> <EffortLabel effort={s.effort} />
         <span className="hide-sm">{s.intent ? ` · ${s.intent}` : ''}</span>)
       </span>
       {over && <span className="yellow">已超过计划时长</span>}
@@ -253,7 +254,7 @@ export const Bottom = forwardRef<PromptHandle, {
         {advice ? <span className="yellow">{advice}</span> : <button className="sl faint" onClick={() => open({ type: 'help' })}>? for shortcuts</button>}
         <span className="spacer" />
         <button className="sl" title={`模型档位：${TIERS[state.hie.tier].hint}（点击选择）`} onClick={() => onRun('/model')}>
-          <TierLabel tier={state.hie.tier} />
+          <TierLabel tier={state.hie.tier} lanes={state.hie.tier === 'fable' ? ops.laneCount(state) : 1} />
         </button>
         <span className="sep">·</span>
         <button className="sl" title="推理强度（点击选择）" onClick={() => onRun('/effort')}>
