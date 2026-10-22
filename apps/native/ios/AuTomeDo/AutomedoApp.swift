@@ -68,6 +68,10 @@ enum Screenshot {
             if case let .form(form)? = model.sheet {
                 _ = await model.submit(form, ["doneWhen": "两套方案能直接用在首页", "steps": "选字体；定主色；做样张", "start": "1 2", "risk": "配色要和插画一起看"])
             }
+            await model.run("/session 45")
+            if case let .form(form)? = model.sheet {
+                _ = await model.submit(form, ["intent": "定配色", "tier": "fable", "effort": "medium", "minutes": "45"])
+            }
         case "review":
             await model.review(0)
         case "timeline":
@@ -75,7 +79,7 @@ enum Screenshot {
         case "switcher":
             model.present(.switcher)
         case "command":
-            await model.suggest("/re")
+            model.draft = "/re"
         default:
             break
         }

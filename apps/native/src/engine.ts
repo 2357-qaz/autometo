@@ -321,8 +321,9 @@ export function createEngine(host: Host) {
     /** Demo data (for screenshots / a first look), keeping this device's identity. */
     seedDemo(): Result {
       const s = emptyState();
+      s.ui.deviceId = store.get().ui.deviceId; // before seeding: its tasks in progress are this device's
       seedDemo(s);
-      store.replace({ ...s, ui: { ...s.ui, deviceId: store.get().ui.deviceId } }, '载入示例数据');
+      store.replace(s, '载入示例数据');
       return { text: '已载入示例数据', undoable: true };
     },
     currentWsId: () => currentWs(store.get())?.id ?? null,

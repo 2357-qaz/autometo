@@ -22,7 +22,7 @@ import {
   type Task,
   type Workspace,
 } from '@automedo/core';
-import { historyBlocks, wsHeaderLines, type Line } from '../../tui/src/format';
+import { displayWidth, historyBlocks, wsHeaderLines, type Line } from '../../tui/src/format';
 
 export interface TaskView {
   id: string;
@@ -97,6 +97,22 @@ export interface ViewModel {
 }
 
 const LANES_TIER = 'fable';
+
+/** Columns of monospaced text across a phone screen (the timeline wraps; rules must not). */
+const PHONE_COLUMNS = 40;
+
+/** Shorten runs of ─ (day separators) so a line fits `cols`. */
+export function fitRules(lines: Line[], cols = PHONE_COLUMNS): Line[] {
+  return lines.map((line) => {
+    const over = displayWidth(line.map((s) => s.t).join('')) - cols;
+    if (over <= 0) return line;
+    return line.map((s) => {
+      const m = s.t.match(/─{6,}$/);
+      if (!m) return s;
+      return { ...s, t: s.t.slice(0, s.t.length - Math.min(over, m[0].length - 4)) };
+    });
+  });
+}
 
 function syncLine(st: SyncStatus): ViewModel['status']['sync'] {
   if (st.phase === 'off') return { text: '本地', tone: 'dim' };
@@ -217,7 +233,7 @@ export function buildView(state: AppState, sync: SyncStatus, opts: { openedAt: n
         }
       : null,
     otherSessions: otherSessions(state).map((o) => ({ intent: o.intent, startedAt: runStartedAt(state, o.runId), plannedMin: o.plannedMin })),
-    timeline: ws ? historyBlocks(ws, state.sessions, 60) : [],
+    timeline: ws ? historyBlocks(ws, state.sessions, 60).map((b) => ({ ...b, lines: fitRules(b.lines) })) : [],
     resume: ws ? resumable(state, ws, opts.openedAt) : null,
     canUndo: opts.canUndo,
   };

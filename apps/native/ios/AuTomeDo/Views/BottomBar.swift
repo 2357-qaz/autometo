@@ -61,6 +61,12 @@ struct BottomBar: View {
                 .submitLabel(.send)
                 .onSubmit(send)
                 .onChange(of: input) { _, now in Task { await model.suggest(now) } }
+                .onChange(of: model.draft) { _, draft in
+                    guard let draft else { return }
+                    input = draft
+                    focused = true
+                    model.draft = nil
+                }
             if !input.isEmpty {
                 Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.title3) }
                     .foregroundStyle(Theme.accent)

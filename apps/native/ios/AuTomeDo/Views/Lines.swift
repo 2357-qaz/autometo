@@ -26,17 +26,22 @@ extension Line {
 }
 
 /// Lines of the terminal version (timeline, review, help…), drawn with their colours.
+/// `wrap: false` keeps each line whole, like a terminal (columns stay aligned); the
+/// caller puts it in a horizontal scroll view.
 struct LinesView: View {
     let lines: [Line]
-    var size: CGFloat = 12.5
+    var size: CGFloat = 12
+    var wrap = true
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 2) {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                Text(line.isEmpty ? AttributedString(" ") : line.attributed)
-                    .font(Theme.mono(size))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                let text = Text(line.isEmpty ? AttributedString(" ") : line.attributed).font(Theme.mono(size))
+                if wrap {
+                    text.frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    text.lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                }
             }
         }
         .textSelection(.enabled)
@@ -50,8 +55,8 @@ struct LinesSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LinesView(lines: lines).padding()
+            ScrollView([.vertical, .horizontal]) {
+                LinesView(lines: lines, wrap: false).padding()
             }
             .background(Theme.bg)
             .navigationTitle(title)
@@ -96,8 +101,8 @@ struct ReviewSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LinesView(lines: review.lines, size: 12).padding()
+            ScrollView([.vertical, .horizontal]) {
+                LinesView(lines: review.lines, size: 11.5, wrap: false).padding()
             }
             .background(Theme.bg)
             .navigationTitle(review.title)

@@ -223,6 +223,21 @@ describe('engine in a JavaScriptCore-like context', () => {
     app.stop();
   });
 
+  it('demo data belongs to this device; the timeline fits a phone', async () => {
+    const app = launch();
+    await app.call('seedDemo');
+    const v = await app.call('view');
+    const active = v.ws.tasks.find((t: { status: string }) => t.status === 'active');
+    expect(active).toMatchObject({ here: true, elsewhere: false });
+    const width = (l: { t: string }[]) => [...l.map((x) => x.t).join('')].length;
+    const rules = v.timeline.flatMap((b: { lines: { t: string }[][] }) => b.lines).filter((l: { t: string }[]) => l.some((x) => x.t.startsWith('── ')));
+    expect(rules.length).toBeGreaterThan(0);
+    for (const r of rules) expect(width(r)).toBeLessThanOrEqual(40);
+    // Fable on the demo's task in progress asks to split it.
+    expect((await app.call('execute', { input: '/model fable' })).intent).toMatchObject({ type: 'form', title: '拆分「确定字体与配色」' });
+    app.stop();
+  });
+
   it('feeds the widget and the reminders', async () => {
     const app = launch();
     await app.call('execute', { input: '/plan P' });

@@ -25,9 +25,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var output: Output?
     @Published private(set) var suggestions: [Suggestion] = []
     @Published private(set) var loadError: String?
+    /// Text to put into the prompt (and focus it), e.g. for a screenshot.
+    @Published var draft: String?
 
     let engine: Engine
-    private let surfaces = Surfaces()
+    /// Demo data never reaches the widget, the Live Activity or notifications.
+    private let surfaces: Surfaces? = Screenshot.isDemo ? nil : Surfaces()
     private var refreshing = false
     private var refreshAgain = false
 
@@ -54,7 +57,7 @@ final class AppModel: ObservableObject {
             }
         } while refreshAgain
         refreshing = false
-        await surfaces.update(engine)
+        await surfaces?.update(engine)
     }
 
     // MARK: - actions
@@ -160,13 +163,13 @@ final class AppModel: ObservableObject {
     /// Leaving the app: write everything now; the widget and reminders follow.
     func flush() async {
         _ = await engine.call("flush")
-        await surfaces.update(engine, force: true)
+        await surfaces?.update(engine, force: true)
     }
 
     /// Coming back: catch up (e.g. notifications allowed in Settings meanwhile).
     func activate() async {
         await refresh()
-        await surfaces.update(engine, force: true)
+        await surfaces?.update(engine, force: true)
     }
 
     func clearOutput() {
