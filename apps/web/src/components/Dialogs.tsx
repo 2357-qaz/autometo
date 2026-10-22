@@ -3,10 +3,10 @@ import type { Intent as Dialog } from '@automedo/core';
 import { useApp } from '../ctx';
 import { COMMANDS } from '@automedo/core';
 import { generateCompact } from '@automedo/core';
-import { activeSession, EFFORT_ORDER, EFFORTS, estimateTokens, FATIGUE_LABELS, fatigueMult, latestFatigue, runSegmentsTokens, TIER_ORDER, TIERS, tokensToday } from '@automedo/core';
+import { activeSession, EFFORT_ORDER, EFFORTS, estimateTokens, FATIGUE_LABELS, fatigueMult, latestFatigue, ratePerMin, runSegmentsTokens, splitIntent, TIER_ORDER, TIERS, tokensToday } from '@automedo/core';
 import { ops } from '@automedo/core';
 import { activePlan, currentWs, findWs } from '@automedo/core';
-import type { Effort, Tier, Verdict, Workspace } from '@automedo/core';
+import type { AppState, Effort, Tier, Verdict, Workspace } from '@automedo/core';
 import { delta, describeConflict, describeGuard, fieldLabel, fmtAgo, fmtDuration, fmtSpan, fmtTokens, generateReview, pickSpec, reviewLabels, reviewMarkdown, reviewTitle, type ConflictNote, type PickKind, type Review } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
 import { useSyncStatus } from '../sync';
@@ -64,7 +64,7 @@ function Shell(props: { title: ReactNode; desc?: ReactNode; wide?: boolean; onSu
 
 /** Wrap a mutation so dialog shows the user error instead of closing. */
 function useSubmit() {
-  const { store, say, close } = useApp();
+  const { store, say, close, open } = useApp();
   const [err, setErr] = useState<string | null>(null);
   const submit = (label: string, fn: Parameters<typeof store.mutate>[1], keepOpen = false) => {
     try {
@@ -73,6 +73,12 @@ function useSubmit() {
       if (!keepOpen) close();
       return true;
     } catch (e) {
+      if (e instanceof ops.SplitRequired) {
+        // Fable: this dialog gives way to the split questions, which rerun `fn` once answered.
+        say({ cmd: label, text: `${e.message}：先回答几个问题` });
+        open(splitIntent(e, label, fn));
+        return false;
+      }
       setErr((e as Error).message);
       return false;
     }
@@ -100,6 +106,8 @@ export function DialogHost({ dialog }: { dialog: Dialog }) {
       return <Resume compactId={dialog.compactId} />;
     case 'editTask':
       return <EditTask taskId={dialog.taskId} />;
+    case 'split':
+      return <SplitTask key={dialog.taskId} taskId={dialog.taskId} label={dialog.label} retry={dialog.retry} />;
     case 'help':
       return <Help />;
     case 'switch':
@@ -219,7 +227,7 @@ function TierPicker({ tier, setTier, effort, setEffort }: { tier: Tier; setTier:
         <div className="seg" role="group" aria-label="模型档位">
           {TIER_ORDER.map((t) => (
             <button type="button" key={t} aria-pressed={tier === t} onClick={() => setTier(t)}>
-              <TierLabel tier={t} /> <span className="dim">· {TIERS[t].rate}/min</span>
+              <TierLabel tier={t} /> <span className="dim">· {TIERS[t].rate}/min{TIERS[t].lane ? ` · 每多一路 +${TIERS[t].lane}` : ''}</span>
               <small>{TIERS[t].hint}</small>
             </button>
           ))}
@@ -250,7 +258,8 @@ function StartSession({ minutes }: { minutes?: number }) {
   const [intent, setIntent] = useState(active?.title ?? (ws?.kind === 'goal' ? ws.nextAction : ''));
   const { err, submit } = useSubmit();
   const fatNow = latestFatigue(state);
-  const est = estimateTokens(tier, effort, Number(mins) || 0, fatNow);
+  const lanes = tier === 'fable' ? ops.laneCount(state) : 1;
+  const est = estimateTokens(tier, effort, Number(mins) || 0, fatNow, lanes);
   const used = tokensToday(state);
   const left = state.settings.dailyBudget - used;
   return (
@@ -269,12 +278,74 @@ function StartSession({ minutes }: { minutes?: number }) {
           <span>预计消耗</span>
           <div>
             ≈ <span className="accent">{fmtTokens(est)}</span> tokens
+            {lanes > 1 && <span className="pink"> · 按现在并行 {lanes} 路</span>}
             {fatigueMult(fatNow) > 1 && <span className="yellow"> · 疲劳 {fatNow}/5 ×{fatigueMult(fatNow)}</span>}
             <span className={est > left ? 'red' : 'dim'} style={{ marginLeft: 12 }}>今日剩余 {fmtTokens(Math.max(0, left))}{est > left ? ' · 将超出预算' : ''}</span>
           </div>
         </div>
       </div>
       <div className="disclaimer">“模型”“Token”只是交互隐喻，用来安排投入强度；不是对脑力或疲劳的生理测量。</div>
+    </Shell>
+  );
+}
+
+/** The questions Fable asks before work starts: what done looks like, the steps, what runs in parallel, the risk. */
+function SplitTask({ taskId, label, retry }: { taskId: string; label?: string; retry?: (d: AppState) => unknown }) {
+  const { state } = useApp();
+  const ws = ops.requireWsSafe(state);
+  const t = ws && ops.taskList(ws).find((x) => x.id === taskId);
+  const had = ws && t ? ops.childrenOf(ws, t.id).length : 0;
+  const [doneWhen, setDoneWhen] = useState('');
+  const [steps, setSteps] = useState('');
+  const [risk, setRisk] = useState('');
+  const [picked, setPicked] = useState<number[] | null>(null);
+  const { err, submit } = useSubmit();
+  if (!ws || !t) return <Shell title="找不到任务">这个任务已经不在了。</Shell>;
+  const list = ops.splitSteps(steps);
+  // Until the user picks, a forced split starts the first step (like the TUI's default "1").
+  const chosen = (picked ?? (retry ? [0] : [])).filter((i) => i < list.length);
+  const fable = state.hie.tier === 'fable' || !!retry;
+  const effective = fable ? chosen : chosen.slice(0, 1);
+  const toggle = (i: number) => setPicked(chosen.includes(i) ? chosen.filter((x) => x !== i) : [...chosen, i].sort((a, b) => a - b));
+  // Lanes once started: the chosen steps plus this task's subtasks already in progress here.
+  const lanes = effective.length + ops.activeLanes(ws, state).filter((k) => k.parentId === t.id).length;
+  const rate = Math.round(ratePerMin('fable', state.hie.effort, latestFatigue(state), Math.max(1, lanes)));
+  return (
+    <Shell
+      wide
+      title={<><span className="pink">✂︎</span> 拆分「{t.title}」</>}
+      desc={retry ? 'Fable 先拆分再动手：回答这几个问题，然后继续刚才的操作。' : had ? `已有 ${had} 个子任务，新写的步骤接在后面。` : '把任务拆成能分头推进的几步。'}
+      error={err}
+      submitLabel={effective.length ? `✂︎ 拆分并开始 ${effective.length} 路` : '✂︎ 拆分'}
+      onSubmit={() =>
+        submit(label ?? '拆分任务', (d) => ops.submitSplit(d, t.id, { doneWhen, steps: list, risk, start: chosen.map((i) => i + 1).join(' ') }, retry))
+      }
+    >
+      <label className="field"><span>① 做完是什么样？</span><input data-autofocus value={doneWhen} onChange={(e) => setDoneWhen(e.target.value)} placeholder="完成标准，越具体越好" /></label>
+      <label className="field">
+        <span>② 拆成哪几步？<span className="faint">（每行一步，至少 2 步）</span></span>
+        <textarea value={steps} onChange={(e) => setSteps(e.target.value)} placeholder={'列提纲\n写初稿\n找配图'} rows={4} />
+      </label>
+      <div className="field">
+        <span>③ 哪几步现在就并行开始？<span className="faint">（点选；不选就先不开始）</span></span>
+        {list.length ? (
+          <div className="split-steps">
+            {list.map((x, i) => (
+              <button type="button" key={i} className="toggle" role="checkbox" aria-checked={chosen.includes(i)} onClick={() => toggle(i)}>
+                <span className="tb">[{chosen.includes(i) ? 'x' : ' '}]</span> <span className="faint">{i + 1}.</span> {x}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <span className="faint">先在上面写下步骤</span>
+        )}
+        {fable ? (
+          effective.length > 0 && <span className="dim">Fable 并行 {lanes} 路 ≈ <span className="pink">{rate.toLocaleString()}</span> tokens/min（每多一路 +{TIERS.fable.lane}）</span>
+        ) : (
+          chosen.length > 1 && <span className="yellow">当前不是 Fable 档：只会开始第 {chosen[0] + 1} 步，其余在 Fable 档才能并行</span>
+        )}
+      </div>
+      <label className="field"><span>④ 最大的不确定 / 风险是什么？<span className="faint">（可选）</span></span><input value={risk} onChange={(e) => setRisk(e.target.value)} placeholder="比如：配图还没有着落" /></label>
     </Shell>
   );
 }
@@ -622,7 +693,7 @@ function ReviewBody({ r }: { r: Review }) {
       )}
       {focus > 0 && (
         <div className="dim review-tiers">
-          投入方式：{(['haiku', 'sonnet', 'opus'] as const).filter((x) => r.tiers[x]).map((x) => `${TIERS[x].label} ${fmtSpan(r.tiers[x])}`).join(' · ')}
+          投入方式：{TIER_ORDER.filter((x) => r.tiers[x]).map((x) => `${TIERS[x].label} ${fmtSpan(r.tiers[x])}`).join(' · ')}
           {r.overrun != null && <> · Session 实际用时 / 计划 <span className={r.overrun >= 1.3 ? 'yellow' : ''}>{Math.round(r.overrun * 100)}%</span></>}
         </div>
       )}

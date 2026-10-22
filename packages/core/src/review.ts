@@ -1,7 +1,7 @@
 // Weekly review: what got done, where plans drifted and why, where the time and tokens
 // went, and how effort related to fatigue. Rule-based over the Execution Log and the
 // HIE sessions — no LLM involved.
-import { sessionUsage, TIERS } from './hie';
+import { sessionUsage, TIER_ORDER, TIERS } from './hie';
 import type { AppState, EventType, LogEntry, Tier, Verdict, Workspace } from './types';
 import { DAY, fmtDate, fmtSpan, fmtTokens, startOfDay } from './util';
 
@@ -166,7 +166,7 @@ export function generateReview(state: AppState, offset = 0, now = Date.now()): R
     .filter((x) => DRIFT.has(x.e.type))
     .map((x) => ({ at: x.e.at, ws: x.ws.title, type: x.e.type as ReviewDrift['type'], title: x.e.title ?? x.e.text, reason: x.e.reason, detail: x.e.detail }));
 
-  const tiers: Record<Tier, number> = { haiku: 0, sonnet: 0, opus: 0 };
+  const tiers = Object.fromEntries(TIER_ORDER.map((t) => [t, 0])) as Record<Tier, number>;
   for (const u of usage) tiers[u.s.tier] += u.ms;
 
   // Ended runs that started this week: how long they took vs what was planned.
@@ -223,8 +223,9 @@ function insights(r: Review, evs: { ws: Workspace; e: LogEntry }[]): string[] {
   const over = r.days.filter((d) => d.overBudget).length;
   if (over >= 2) out.push(`${over} 天超出每日预算（${fmtTokens(r.budget)}）：预算偏紧，或者节奏偏满`);
   if (r.overrun != null && r.overrun >= 1.3) out.push(`Session 平均用了计划时长的 ${Math.round(r.overrun * 100)}%：开始时多估一点`);
-  const focus = r.tiers.haiku + r.tiers.sonnet + r.tiers.opus;
-  if (focus > 3 * 3_600_000 && r.tiers.opus / focus > 0.6) out.push(`${Math.round((r.tiers.opus / focus) * 100)}% 的专注时间在 Opus 档：不是所有事都需要最高档`);
+  const focus = TIER_ORDER.reduce((a, t) => a + r.tiers[t], 0);
+  const deep = r.tiers.opus + r.tiers.fable;
+  if (focus > 3 * 3_600_000 && deep / focus > 0.6) out.push(`${Math.round((deep / focus) * 100)}% 的专注时间在 Opus / Fable 档：不是所有事都需要最高档`);
   for (const w of r.workspaces) {
     const bad = w.checkpoints.filter((c) => c.verdict === 'blocked' || c.verdict === 'drifting');
     if (bad.length) out.push(`目标「${w.title}」的 Checkpoint 判断为${bad[bad.length - 1].verdict === 'blocked' ? '受阻' : '偏离'}：下一步行动还清楚吗？`);
@@ -272,9 +273,9 @@ export function reviewMarkdown(r: Review): string {
     out.push('', '## 偏离与修正');
     for (const d of r.drift) out.push(`- ${weekday(d.at)} ${DRIFT_LABEL[d.type]}「${d.title}」（${d.ws}）${d.reason ? `：${d.reason}` : ''}`);
   }
-  const focus = r.tiers.haiku + r.tiers.sonnet + r.tiers.opus;
+  const focus = TIER_ORDER.reduce((a, t) => a + r.tiers[t], 0);
   if (focus) {
-    out.push('', '## 投入方式', `档位：${(['haiku', 'sonnet', 'opus'] as Tier[]).filter((x) => r.tiers[x]).map((x) => `${TIERS[x].label} ${fmtSpan(r.tiers[x])}`).join(' · ')}`);
+    out.push('', '## 投入方式', `档位：${TIER_ORDER.filter((x) => r.tiers[x]).map((x) => `${TIERS[x].label} ${fmtSpan(r.tiers[x])}`).join(' · ')}`);
     if (r.overrun != null) out.push(`Session 实际用时为计划的 ${Math.round(r.overrun * 100)}%`);
   }
   return out.join('\n');

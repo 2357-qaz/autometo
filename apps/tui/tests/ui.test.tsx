@@ -103,6 +103,40 @@ describe('interactive app', () => {
     t.unmount();
   });
 
+  it('picking Fable with an unsplit task in progress asks the split questions, then runs steps in parallel', async () => {
+    const t = setup(true);
+    t.store.mutate(null, (d) => void (d.hie.tier = 'opus'));
+    const cur = () => t.store.get().plans[0].tasks.find((x) => x.status === 'active' && !x.parentId)!;
+    expect(cur().title).toBe('确定字体与配色');
+    await t.type('/model');
+    await t.key(ENTER);
+    await t.key(RIGHT); // Opus → Fable
+    await t.key(ENTER);
+    expect(t.store.get().hie.tier).toBe('opus'); // not yet: the task has to be split first
+    expect(t.all()).toContain('Fable 档要先把「确定字体与配色」拆成子任务');
+    expect(t.last()).toContain('拆分「确定字体与配色」');
+    await t.type('两套方案能直接用在首页');
+    await t.key(ENTER);
+    await t.type('选字体；定主色；做样张');
+    await t.key(ENTER);
+    await t.type(' 2'); // ③ starts as "1"
+    await t.key(ENTER);
+    await t.key(ENTER); // ④ optional
+    const s = t.store.get();
+    expect(s.hie.tier).toBe('fable');
+    expect(s.plans[0].tasks.filter((x) => x.parentId === cur().id).map((x) => [x.title, x.status])).toEqual([
+      ['选字体', 'active'],
+      ['定主色', 'active'],
+      ['做样张', 'pending'],
+    ]);
+    const rows = t.last().trimEnd().split('\n');
+    expect(rows.at(-1)).toContain('Fable ×2 路');
+    expect(t.last()).toContain('并行 2 路');
+    expect(t.last()).toMatch(/↳ ◼ 选字体/);
+    expect(t.all()).toContain('Split(确定字体与配色)');
+    t.unmount();
+  });
+
   it('←→ on a highlighted /effort suggestion opens the picker one step over; esc cancels', async () => {
     const t = setup(true);
     await t.type('/effort');

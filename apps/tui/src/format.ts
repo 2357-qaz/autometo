@@ -6,12 +6,14 @@ import {
   fmtDuration,
   fmtTokens,
   startOfDay,
+  TIER_ORDER,
   TIERS,
   type DiffLine,
   type Effort,
   type LogEntry,
   type Plan,
   type Session,
+  type Task,
   type Tier,
   type Workspace,
   type AppState,
@@ -21,7 +23,7 @@ import {
   reviewLabels,
   reviewTitle,
 } from '@automedo/core';
-import { checkpointDue, currentPhase, currentTask, diffSummary, dueAt, fmtAgo, nextCheckpointAt, orderedTasks, otherActiveTasks, type Goal } from './core-ops';
+import { checkpointDue, childrenOf, currentPhase, currentTask, diffSummary, dueAt, fmtAgo, nextCheckpointAt, orderedTasks, otherActiveTasks, type Goal } from './core-ops';
 
 /** Terminal display width: CJK / full-width characters take two columns. */
 export function displayWidth(s: string): number {
@@ -46,6 +48,7 @@ export const C = {
   red: '#ef6f6c',
   yellow: '#e5b85c',
   blue: '#7aa7e0',
+  pink: '#e38fb7',
   fg: '#e8e6dc',
   fg2: '#c2bfb4',
   dim: '#8b887f',
@@ -67,12 +70,13 @@ export type Line = Seg[];
 
 const seg = (t: string, c?: string, extra: Partial<Seg> = {}): Seg => ({ t, c, ...extra });
 
-export const TIER_COLOR: Record<Tier, string> = { haiku: C.green, sonnet: C.accent, opus: C.violet };
+export const TIER_COLOR: Record<Tier, string> = { haiku: C.green, sonnet: C.accent, opus: C.violet, fable: C.pink };
 const EFFORT_N: Record<Effort, number> = { low: 1, medium: 2, high: 3 };
 const EFFORT_COLOR: Record<Effort, string> = { low: C.dim, medium: C.yellow, high: C.accent };
 
-export function tierSegs(tier: Tier): Seg[] {
-  return [seg(TIERS[tier].label, TIER_COLOR[tier], { b: true })];
+/** Tier label; Fable also shows how many subtasks run in parallel. */
+export function tierSegs(tier: Tier, lanes = 1): Seg[] {
+  return [seg(TIERS[tier].label, TIER_COLOR[tier], { b: true }), ...(tier === 'fable' && lanes > 1 ? [seg(` ×${lanes} 路`, TIER_COLOR[tier])] : [])];
 }
 export function effortSegs(effort: Effort): Seg[] {
   const n = EFFORT_N[effort];
@@ -169,6 +173,12 @@ export function eventLines(e: LogEntry, ws: Workspace, sessions: Session[] = [])
       return tool('Skip', t, C.yellow, null, [...diffLines(e.diff ?? []), ...(e.reason ? [[seg(e.reason, C.dim)]] : [])]);
     case 'defer':
       return tool('Defer', t, C.yellow, null, [[seg(e.detail ?? '', C.dim)], ...(e.reason ? [[seg(`原因：${e.reason}`, C.fg2)]] : [])]);
+    case 'split':
+      return tool('Split', t, C.pink, null, [
+        ...diffLines(e.diff ?? []),
+        ...(e.reason ? [[seg(`完成标准：${e.reason}`, C.fg2)]] : []),
+        ...(e.detail ? [[seg(e.detail, C.dim)]] : []),
+      ]);
     case 'revise':
       return tool('Update', ws.kind === 'plan' ? 'Plan' : 'Goal', C.blue, e.detail ? [seg(e.detail, C.faint)] : null, [
         [seg(`修正「${t}」的阶段目标`, C.dim)],
@@ -322,7 +332,7 @@ export function reviewLines(r: Review): Line[] {
   }
   const focus = r.tiers.haiku + r.tiers.sonnet + r.tiers.opus;
   if (focus) {
-    const tiers = (['haiku', 'sonnet', 'opus'] as Tier[]).filter((x) => r.tiers[x]);
+    const tiers = TIER_ORDER.filter((x) => r.tiers[x]);
     body.push([], [
       seg('投入方式  ', C.fg, { b: true }),
       ...tiers.flatMap((x, i) => [seg(i ? ' · ' : '', C.faint), ...tierSegs(x), seg(` ${fmtSpan(r.tiers[x])}`, C.dim)]),
@@ -442,13 +452,32 @@ export function dockLines(ws: Workspace, max = 5, state?: Pick<AppState, 'ui'>):
   const active = currentTask(ws, state);
   const elsewhere = state ? otherActiveTasks(ws, state) : [];
   const phase = ws.kind === 'plan' ? currentPhase(ws) : undefined;
-  const open = ordered.filter((t) => t.status !== 'done' && t.status !== 'skipped' && t.id !== active?.id && !elsewhere.includes(t));
+  const unfinished = (t: Task) => t.status !== 'done' && t.status !== 'skipped';
+  // The subtasks of the task in progress are listed right under it, all of them.
+  const kids = active ? childrenOf(ws, active.id).filter(unfinished) : [];
+  const lanes = kids.filter((t) => t.status === 'active').length;
+  const open = ordered.filter((t) => unfinished(t) && t.id !== active?.id && !elsewhere.includes(t) && !kids.includes(t));
   const now = phase ? open.filter((t) => t.phaseId === phase.id) : open;
   const later = phase ? open.filter((t) => t.phaseId !== phase.id) : [];
   const list = [...now, ...later];
   const doneN = ordered.filter((t) => t.status === 'done').length;
   const out: Line[] = [];
-  if (active) out.push([seg('◼ ', C.accent), seg(active.title, C.accent, { b: true }), seg(`  #${num(active.id)}`, C.faint)]);
+  if (active) {
+    const done = childrenOf(ws, active.id).length - kids.length;
+    out.push([
+      seg('◼ ', C.accent),
+      seg(active.title, C.accent, { b: true }),
+      seg(`  #${num(active.id)}`, C.faint),
+      ...(kids.length || done ? [seg(`  ${done}/${done + kids.length} 步`, C.dim)] : []),
+      ...(lanes > 1 ? [seg(`  并行 ${lanes} 路`, C.pink)] : []),
+    ]);
+    for (const t of kids) {
+      const on = t.status === 'active';
+      const glyph = on ? '◼' : t.status === 'blocked' ? '✗' : '☐';
+      const color = on ? C.accent : t.status === 'blocked' ? C.red : C.fg2;
+      out.push([seg('  ↳ ', C.faint), seg(`${glyph} `, color), seg(t.title, on ? C.accent : t.status === 'blocked' ? C.red : C.fg), seg(`  #${num(t.id)}`, C.faint)]);
+    }
+  }
   else if (ws.kind === 'goal' && !list.length) out.push([seg('⏺ ', C.accent), seg('下一步：', C.dim), seg(ws.nextAction || '写一个 30 分钟内能开始的动作（/nextaction）', ws.nextAction ? C.fg : C.faint, { b: !!ws.nextAction })]);
   else if (list.length) out.push([seg('◇ ', C.faint), seg('没有进行中的任务 · /start 开始下一个', C.dim)]);
   else if (ordered.length) out.push([seg('✓ ', C.green), seg('全部完成 · /compact 收尾', C.fg2)]);
@@ -457,7 +486,12 @@ export function dockLines(ws: Workspace, max = 5, state?: Pick<AppState, 'ui'>):
   for (const t of list.slice(0, max)) {
     const isLater = later.includes(t);
     const glyph = t.status === 'blocked' ? '✗' : '☐';
-    out.push([seg(`${glyph} `, t.status === 'blocked' ? C.red : C.fg2), seg(t.title, t.status === 'blocked' ? C.red : isLater ? C.dim : C.fg), seg(`  #${num(t.id)}`, C.faint)]);
+    out.push([
+      ...(t.parentId && ordered.some((p) => p.id === t.parentId) ? [seg('  ↳ ', C.faint)] : []),
+      seg(`${glyph} `, t.status === 'blocked' ? C.red : C.fg2),
+      seg(t.title, t.status === 'blocked' ? C.red : isLater ? C.dim : C.fg),
+      seg(`  #${num(t.id)}`, C.faint),
+    ]);
   }
   const foot: string[] = [];
   if (list.length > max) foot.push(`… 还有 ${list.length - max} 项`);

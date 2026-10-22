@@ -27,6 +27,7 @@ import {
   ops,
   runSegmentsTokens,
   runStartedAt,
+  splitIntent,
   tokensToday,
   fmtDuration,
   type AppState,
@@ -132,7 +133,9 @@ function Spinner({ state }: { state: AppState }) {
         {GLYPHS[tick % GLYPHS.length]} {verb}…{' '}
       </Text>
       <Text color={C.dim}>
-        ({fmtDuration(elapsed)} / {s.plannedMin}m · ↑ {fmtTokens(runSegmentsTokens(state, s.runId))} tokens · {tierSegs(s.tier)[0].t}
+        ({fmtDuration(elapsed)} / {s.plannedMin}m · ↑ {fmtTokens(runSegmentsTokens(state, s.runId))} tokens · {tierSegs(s.tier, s.lanes)
+          .map((x) => x.t)
+          .join('')}
         {s.intent ? ` · ${s.intent}` : ''} · ctrl+f 结束)
       </Text>
       {elapsed > s.plannedMin * 60_000 && <Text color={C.yellow}> 已超过计划时长</Text>}
@@ -223,7 +226,7 @@ function StatusLine({ state, sync, notice, preview, keys, saveError }: { state: 
   ];
   const build = (v: (typeof variants)[number]) => ({
     v,
-    right: join([hl('tier', tierSegs(tier)), hl('effort', effortSegs(effort)), ...(v.budget ? [budgetSegs] : []), hl('fatigue', [fatigueSeg0]), [syncSeg]]),
+    right: join([hl('tier', tierSegs(tier, tier === 'fable' ? ops.laneCount(state) : 1)), hl('effort', effortSegs(effort)), ...(v.budget ? [budgetSegs] : []), hl('fatigue', [fatigueSeg0]), [syncSeg]]),
     left: displayWidth(modeText) + (keys ? 2 + displayWidth(keys) : (v.tab ? 12 : 0) + (v.help ? 17 : 0)),
   });
   const fit = variants.map(build).find((x) => x.left + 2 + width(x.right) + 2 <= cols) ?? build(variants[variants.length - 1]);
@@ -729,7 +732,8 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
   );
 
   // Report what a store change did, unless it already shows up as a workspace event.
-  const report = (fn: () => unknown) => {
+  // `retry`: what to rerun once Fable's split questions are answered, if Fable refuses it.
+  const report = (fn: () => unknown, retry?: { label: string; fn: (d: AppState) => unknown }) => {
     const before = currentWs(store.get());
     const n0 = before?.log.length ?? 0;
     try {
@@ -737,6 +741,10 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
       const after = currentWs(store.get());
       if (typeof r === 'string' && !(after?.id === before?.id && (after?.log.length ?? 0) > n0)) print([[{ t: '  ⎿  ', c: C.faint }, { t: r, c: C.dim }]]);
     } catch (e) {
+      if (e instanceof ops.SplitRequired && retry) {
+        print([[{ t: '  ⎿  ', c: C.faint }, { t: `${e.message}：先回答几个问题`, c: C.dim }]]);
+        return open(splitIntent(e, retry.label, retry.fn));
+      }
       print([[{ t: '  ⎿  ', c: C.faint }, { t: (e as Error).message, c: C.red }]]);
     }
   };
@@ -758,7 +766,8 @@ export function App({ store, sync, loadError = null }: { store: Store; sync: Syn
       const n = spec.options.length;
       const choose = (k: number) => {
         setBar(null);
-        report(() => store.mutate(spec.label, (d) => spec.apply(d, spec.options[k].value)));
+        const fn = (d: AppState) => spec.apply(d, spec.options[k].value);
+        report(() => store.mutate(spec.label, fn), { label: spec.label, fn });
       };
       if (key.leftArrow || input === 'h' || (key.tab && key.shift)) return setBar({ ...bar, idx: (bar.idx + n - 1) % n });
       if (key.rightArrow || input === 'l' || key.tab) return setBar({ ...bar, idx: (bar.idx + 1) % n });

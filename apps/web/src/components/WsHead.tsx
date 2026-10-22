@@ -185,7 +185,8 @@ function GoalHead({ goal, sel, setSel }: { goal: Goal; sel: string | null; setSe
   const last = goal.checkpoints[goal.checkpoints.length - 1];
   const due = ops.checkpointDue(goal);
   const done = goal.moves.filter((m) => m.status === 'done' || m.status === 'skipped');
-  const openMoves = goal.moves.filter((m) => !done.includes(m));
+  const ordered = ops.orderedTasks(goal);
+  const openMoves = ordered.filter((m) => !done.includes(m));
   return (
     <div className="ws-head">
       <div className="ws-title">
@@ -214,9 +215,9 @@ function GoalHead({ goal, sel, setSel }: { goal: Goal; sel: string | null; setSe
             label: <>行动 <span className="faint">{goal.moves.length}</span></>,
             body: () => (
               <>
-                {openMoves.map((m) => <TaskRow key={m.id} task={m} num={goal.moves.indexOf(m) + 1} selected={sel === m.id} onSelect={() => setSel(m.id)} />)}
+                {openMoves.map((m) => <TaskRow key={m.id} task={m} num={ordered.indexOf(m) + 1} selected={sel === m.id} onSelect={() => setSel(m.id)} />)}
                 <DoneLine count={done.length} open={showDone} onToggle={() => setShowDone(!showDone)} />
-                {showDone && done.map((m) => <TaskRow key={m.id} task={m} num={goal.moves.indexOf(m) + 1} selected={sel === m.id} onSelect={() => setSel(m.id)} />)}
+                {showDone && done.map((m) => <TaskRow key={m.id} task={m} num={ordered.indexOf(m) + 1} selected={sel === m.id} onSelect={() => setSel(m.id)} />)}
                 <AddRow placeholder="+ 添加行动" onAdd={(v) => act('添加行动', (d) => void ops.addTask(d, v))} />
               </>
             ),

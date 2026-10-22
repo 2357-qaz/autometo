@@ -135,6 +135,14 @@ function EventView({ e, ws }: { e: LogEntry; ws: Workspace }) {
           {e.reason && <div className="fg-2">原因：{e.reason}</div>}
         </Tool>
       );
+    case 'split':
+      return (
+        <Tool name="Split" arg={t} color="pink">
+          {e.diff && <DiffLines lines={e.diff} />}
+          {e.reason && <div className="fg-2">完成标准：{e.reason}</div>}
+          {e.detail && <div className="dim">{e.detail}</div>}
+        </Tool>
+      );
     case 'revise':
       return (
         <Tool name="Update" arg={ws.kind === 'plan' ? 'Plan' : 'Goal'} color="blue" meta={e.detail}>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Ctx, type AppCtx, type Output } from './ctx';
 import type { Intent as Dialog } from '@automedo/core';
-import { execute, type CmdCtx } from '@automedo/core';
+import { execute, splitIntent, type CmdCtx } from '@automedo/core';
 import { activeSession, budgetLevel, hieAdvice, latestFatigue, tokensToday } from '@automedo/core';
 import { ops } from '@automedo/core';
 import { currentWs, parseImport, type Store, type SyncClient } from '@automedo/core';
@@ -48,6 +48,12 @@ export function App({ store, sync, loadError, launch = null }: { store: Store; s
         say({ cmd: cmd ?? label, text: typeof r === 'string' ? r : label, undoable: true });
         return true;
       } catch (e) {
+        if (e instanceof ops.SplitRequired) {
+          // Fable: ask the split questions; answering them reruns this action.
+          say({ cmd: cmd ?? label, text: `${e.message}：先回答几个问题` });
+          setDialog(splitIntent(e, label, fn));
+          return false;
+        }
         if (!(e instanceof ops.UserError)) console.error(e);
         say({ cmd: cmd ?? label, text: (e as Error).message, error: true });
         return false;

@@ -7,6 +7,16 @@ import { activeGoal, activePlan, currentWs, findWs } from './state';
 import { DAY, uid } from './util';
 
 export class UserError extends Error {}
+
+/**
+ * Fable works on split tasks: thrown when a task has to be split into subtasks first.
+ * The client asks the split questions, then reruns the operation that was refused.
+ */
+export class SplitRequired extends UserError {
+  constructor(readonly taskId: string, title: string) {
+    super(`Fable 档要先把「${title}」拆成子任务`);
+  }
+}
 const fail = (msg: string): never => {
   throw new UserError(msg);
 };
@@ -313,13 +323,45 @@ export function deletePhase(d: AppState, phaseId: string): string {
 
 // ───────────────────────── tasks (plan tasks & goal moves) ─────────────────────────
 
-/** Ordered task list used for numbering (#1, #2…) in the current workspace. */
+/** Ordered task list used for numbering (#1, #2…) in the current workspace. Subtasks follow their parent. */
 export function orderedTasks(ws: Workspace): Task[] {
-  if (ws.kind === 'goal') return ws.moves;
-  const out: Task[] = [];
-  for (const ph of ws.phases) out.push(...ws.tasks.filter((t) => t.phaseId === ph.id));
-  out.push(...ws.tasks.filter((t) => !ws.phases.some((ph) => ph.id === t.phaseId)));
-  return out;
+  const list = taskList(ws);
+  const byId = new Map(list.map((t) => [t.id, t]));
+  // A subtask whose parent is gone (deleted on another device) or is itself a subtask stands on its own.
+  const isTop = (t: Task) => !t.parentId || !byId.has(t.parentId) || !!byId.get(t.parentId)!.parentId;
+  const kids = new Map<string, Task[]>();
+  for (const t of list) if (!isTop(t)) kids.set(t.parentId!, [...(kids.get(t.parentId!) ?? []), t]);
+  let roots = list.filter(isTop);
+  if (ws.kind === 'plan') {
+    const inPhase = (id: string | null) => roots.filter((t) => t.phaseId === id);
+    roots = [...ws.phases.flatMap((ph) => inPhase(ph.id)), ...roots.filter((t) => !ws.phases.some((ph) => ph.id === t.phaseId))];
+  }
+  return roots.flatMap((t) => [t, ...(kids.get(t.id) ?? [])]);
+}
+
+/** Subtasks of a task, in order. */
+export function childrenOf(ws: Workspace, taskId: string): Task[] {
+  return orderedTasks(ws).filter((t) => t.parentId === taskId);
+}
+
+/** The task a subtask was split from (undefined for top-level tasks and orphans). */
+export function parentOf(ws: Workspace, t: Task): Task | undefined {
+  return t.parentId ? taskList(ws).find((x) => x.id === t.parentId && !x.parentId) : undefined;
+}
+
+/** Whether Fable must split this task before it can start: a top-level task without subtasks. */
+export function needsSplit(ws: Workspace, t: Task): boolean {
+  return !parentOf(ws, t) && !childrenOf(ws, t.id).length;
+}
+
+/** This device's subtasks in progress: the parallel lanes of the split tasks it works on. */
+export function activeLanes(ws: Workspace, state: Pick<AppState, 'ui'>): Task[] {
+  return orderedTasks(ws).filter((t) => t.status === 'active' && !!parentOf(ws, t) && onThisDevice(t.activeBy, state));
+}
+
+/** Parallel lanes on this device across all plans and goals (at least 1). */
+export function laneCount(d: AppState): number {
+  return Math.max(1, [...d.plans, ...d.goals].reduce((n, ws) => n + activeLanes(ws, d).length, 0));
 }
 
 /**
@@ -344,6 +386,9 @@ const numOf = (ws: Workspace, id: string) => orderedTasks(ws).findIndex((t) => t
 export function resolveTask(ws: Workspace, ref: string | undefined, state?: Pick<AppState, 'ui'>): Task {
   const list = orderedTasks(ws);
   if (!ref || !ref.trim()) {
+    const lanes = state ? activeLanes(ws, state) : [];
+    if (lanes.length > 1) fail(`正在并行推进 ${lanes.length} 路（${lanes.map((t) => `#${numOf(ws, t.id)}`).join(' ')}），请指定编号，例如 /done ${numOf(ws, lanes[0].id)}`);
+    if (lanes.length === 1) return lanes[0];
     const cur = currentTask(ws, state);
     if (cur) return cur;
     const other = state ? otherActiveTasks(ws, state)[0] : undefined;
@@ -403,13 +448,22 @@ export function setTaskStatus(d: AppState, taskId: string, status: TaskStatus, n
   const task = list.find((t) => t.id === taskId) ?? fail('找不到任务');
   const from = task.status;
   if (from === status) return `${STATUS_LABEL[status]}：${task.title}（未变化）`;
+  const parent = parentOf(ws, task);
+  const pre: string[] = [];
+  const post: string[] = [];
   if (status === 'active') {
+    if (d.hie.tier === 'fable' && needsSplit(ws, task)) throw new SplitRequired(task.id, task.title);
+    // A subtask runs inside its parent: starting it starts the parent too.
+    if (parent && parent.status !== 'active') pre.push(setTaskStatus(d, parent.id, 'active'));
     // First execution freezes the plan as baseline v1 — the reference for Plan Diff.
     if (ws.kind === 'plan' && !ws.versions.length) commitPlan(d, '', true);
-    // One task in progress per device, like a focused agent. Another device's task in
-    // progress is that device's business: it is left alone (parallel sessions).
+    // One task in progress per device, like a focused agent — Fable runs the subtasks of
+    // one split task in parallel; elsewhere a split task runs one subtask at a time.
+    // Another device's task in progress is that device's business (parallel sessions).
+    const root = parent ?? task;
+    const keep = (t: Task) => t.id === root.id || (t.parentId === root.id && (d.hie.tier === 'fable' || !parent));
     for (const t of list) {
-      if (t.status === 'active' && t.id !== taskId && onThisDevice(t.activeBy, d)) {
+      if (t.status === 'active' && t.id !== taskId && onThisDevice(t.activeBy, d) && !keep(t)) {
         t.status = 'pending';
         delete t.activeBy;
       }
@@ -425,6 +479,15 @@ export function setTaskStatus(d: AppState, taskId: string, status: TaskStatus, n
   task.status = status;
   if (status === 'active' && d.ui.deviceId) task.activeBy = d.ui.deviceId;
   else delete task.activeBy;
+  if (status !== 'active' && !parent) {
+    // The subtasks being worked on stop with their parent (and say so).
+    const stopped = childrenOf(ws, taskId).filter((t) => t.status === 'active' && onThisDevice(t.activeBy, d));
+    for (const t of stopped) {
+      t.status = 'pending';
+      delete t.activeBy;
+    }
+    if (stopped.length) post.push(`子任务已暂停：${stopped.map((t) => t.title).join('、')}`);
+  }
   const now = Date.now();
   if (status === 'done') task.doneAt = now;
   else delete task.doneAt;
@@ -465,11 +528,16 @@ export function setTaskStatus(d: AppState, taskId: string, status: TaskStatus, n
     diff: type === 'skip' ? [{ sign: '-', num: numOf(ws, taskId), text: `☐ ${task.title}`, note: '跳过' }] : undefined,
   });
   let msg = `${STATUS_LABEL[status]}：${task.title}`;
+  const open = (t: Task) => t.status === 'pending' || t.status === 'active' || t.status === 'blocked';
+  if (parent && (status === 'done' || status === 'skipped') && parent.status !== 'done' && !childrenOf(ws, parent.id).some(open)) {
+    msg += `　·　「${parent.title}」的子任务都结束了，可 /done ${numOf(ws, parent.id)} 完成它`;
+  }
   if (ws.kind === 'plan' && status === 'done' && task.phaseId) {
-    const rest = ws.tasks.filter((t) => t.phaseId === task.phaseId && (t.status === 'pending' || t.status === 'active' || t.status === 'blocked'));
+    const rest = ws.tasks.filter((t) => t.phaseId === task.phaseId && open(t));
     if (ph && ph.status !== 'done' && rest.length === 0) msg += `　·　阶段「${ph.title}」任务已清空，可 /phase done 结束本阶段`;
   }
-  return msg;
+  syncLanes(d);
+  return [...pre, [msg, ...post].join('　·　')].join('　→　');
 }
 
 export function cycleTask(d: AppState, taskId: string): string {
@@ -482,10 +550,22 @@ export function cycleTask(d: AppState, taskId: string): string {
 /** Complete the in-progress task (if any) and start the next pending one. */
 export function nextTask(d: AppState): string {
   const ws = requireWs(d);
-  const cur = currentTask(ws, d);
+  const lanes = activeLanes(ws, d);
+  if (lanes.length > 1) fail(`正在并行推进 ${lanes.length} 路：用 /done #n 完成其中一路`);
+  const cur = lanes[0] ?? currentTask(ws, d);
   const parts: string[] = [];
+  const kids = cur ? childrenOf(ws, cur.id) : [];
+  if (cur && kids.some((t) => t.status !== 'done' && t.status !== 'skipped')) {
+    // A split task is done through its subtasks: go on with the next one.
+    const k = kids.find((t) => t.status === 'pending') ?? fail(`「${cur.title}」还有子任务没结束`);
+    return setTaskStatus(d, k.id, 'active');
+  }
   if (cur) parts.push(setTaskStatus(d, cur.id, 'done'));
-  const nx = orderedTasks(requireWs(d)).find((t) => t.status === 'pending');
+  // Prefer the next subtask of the same parent; never reopen a finished parent for a leftover subtask.
+  const all = orderedTasks(requireWs(d));
+  const nx =
+    (cur?.parentId && all.find((t) => t.status === 'pending' && t.parentId === cur.parentId)) ||
+    all.find((t) => t.status === 'pending' && !(t.parentId && all.find((p) => p.id === t.parentId)?.status === 'done'));
   if (nx) parts.push(setTaskStatus(d, nx.id, 'active'));
   else parts.push('没有更多待办任务 ✓');
   return parts.join('　→　');
@@ -500,19 +580,31 @@ export function deferTask(d: AppState, taskId: string, reason = ''): string {
   const t = list[i];
   if (t.status === 'done') fail('已完成的任务不能延期');
   const r = reason.trim() || undefined;
-  let detail = '移到列表末尾';
-  if (ws.kind === 'plan') {
+  const parent = parentOf(ws, t);
+  let detail = parent ? `移到「${parent.title}」的最后` : '移到列表末尾';
+  const kids = parent ? [] : childrenOf(ws, t.id);
+  if (ws.kind === 'plan' && !parent) {
     const pi = ws.phases.findIndex((x) => x.id === t.phaseId);
     const target = ws.phases.slice(pi + 1).find((x) => x.status !== 'done');
     const from = ws.phases[pi];
     if (target) {
       t.phaseId = target.id;
+      for (const k of kids) k.phaseId = target.id; // subtasks go along
       detail = `${from?.title ?? '?'} → ${target.title}`;
     }
   }
   list.splice(i, 1);
   list.push(t);
+  if (t.status === 'active') {
+    for (const k of kids) {
+      if (k.status === 'active' && onThisDevice(k.activeBy, d)) {
+        k.status = 'pending';
+        delete k.activeBy;
+      }
+    }
+  }
   t.status = 'pending';
+  delete t.activeBy;
   if (r) t.note = r;
   emit(d, ws, {
     type: 'defer',
@@ -540,6 +632,7 @@ export function updateTask(d: AppState, taskId: string, patch: { title?: string;
     const a = ws.phases.find((x) => x.id === t.phaseId)?.title ?? '?';
     const b = ws.phases.find((x) => x.id === patch.phaseId)?.title ?? '?';
     t.phaseId = patch.phaseId;
+    for (const k of childrenOf(ws, taskId)) k.phaseId = patch.phaseId; // subtasks go along
     diff.push({ sign: '~', num: numOf(ws, taskId), text: `☐ ${t.title}`, note: `${a} → ${b}` });
   }
   if (diff.length) emit(d, ws, { type: 'edit', taskId, title: t.title, text: `修改任务：${t.title}`, diff });
@@ -553,9 +646,19 @@ export function deleteTask(d: AppState, taskId: string): string {
   const i = list.findIndex((x) => x.id === taskId);
   if (i < 0) fail('找不到任务');
   const n = numOf(ws, taskId);
+  // A split task goes together with its subtasks.
+  const kids = childrenOf(ws, taskId).map((k) => ({ k, n: numOf(ws, k.id) }));
   const [t] = list.splice(i, 1);
-  emit(d, ws, { type: 'remove', taskId, title: t.title, text: `- ${t.title}`, diff: [{ sign: '-', num: n, text: `☐ ${t.title}` }] });
-  return `已删除：${t.title}`;
+  for (const { k } of kids) list.splice(list.indexOf(k), 1);
+  emit(d, ws, {
+    type: 'remove',
+    taskId,
+    title: t.title,
+    text: `- ${t.title}${kids.length ? `（连同 ${kids.length} 个子任务）` : ''}`,
+    diff: [{ sign: '-', num: n, text: `☐ ${t.title}` }, ...kids.map(({ k, n }) => ({ sign: '-' as const, num: n, text: `☐ ${k.title}`, note: `↳ ${t.title}` }))],
+  });
+  syncLanes(d);
+  return `已删除：${t.title}${kids.length ? `（连同 ${kids.length} 个子任务）` : ''}`;
 }
 
 export function moveTask(d: AppState, taskId: string, dir: -1 | 1) {
@@ -564,10 +667,91 @@ export function moveTask(d: AppState, taskId: string, dir: -1 | 1) {
   const i = list.findIndex((x) => x.id === taskId);
   if (i < 0) return;
   const t = list[i];
+  // Subtasks move among their siblings; top-level tasks among the top-level tasks of their phase.
+  const parent = parentOf(ws, t);
+  const peer = (x: Task) => (parent ? x.parentId === parent.id : !parentOf(ws, x) && x.phaseId === t.phaseId);
   let j = i + dir;
-  while (j >= 0 && j < list.length && list[j].phaseId !== t.phaseId) j += dir;
+  while (j >= 0 && j < list.length && !peer(list[j])) j += dir;
   if (j < 0 || j >= list.length) return;
   [list[i], list[j]] = [list[j], list[i]];
+}
+
+/** Split a task into steps from text: one per line, or separated by ；/ ; */
+export function splitSteps(text: string): string[] {
+  return text.split(/[\n;；]+/).map((x) => x.trim()).filter(Boolean);
+}
+
+export interface SplitAnswers {
+  /** What "done" looks like. */
+  doneWhen: string;
+  steps: string[];
+  /** The biggest uncertainty / risk (optional). */
+  risk?: string;
+}
+
+/** Split a top-level task of the current workspace into subtasks (adds to any it already has). */
+export function splitTask(d: AppState, taskId: string, a: SplitAnswers): Task[] {
+  const ws = requireWs(d);
+  const list = taskList(ws);
+  const t = list.find((x) => x.id === taskId) ?? fail('找不到任务');
+  if (parentOf(ws, t)) fail('子任务不再继续拆分');
+  if (t.status === 'done' || t.status === 'skipped') fail('已结束的任务不需要拆分');
+  const doneWhen = a.doneWhen.trim() || fail('先写下做完是什么样');
+  const steps = a.steps.map((x) => x.trim()).filter(Boolean);
+  const had = childrenOf(ws, taskId);
+  if (had.length + steps.length < 2) fail('至少拆成 2 步（每行一步，或用 ；分隔）');
+  const risk = a.risk?.trim() || undefined;
+  t.note = [t.note, `完成标准：${doneWhen}`, risk && `风险：${risk}`].filter(Boolean).join('\n');
+  const now = Date.now();
+  const kids: Task[] = steps.map((title) => ({ id: uid(), title, status: 'pending', phaseId: t.phaseId, parentId: t.id, createdAt: now }));
+  const last = had.length ? had[had.length - 1] : t;
+  list.splice(list.indexOf(last) + 1, 0, ...kids);
+  emit(d, ws, {
+    type: 'split',
+    taskId,
+    title: t.title,
+    phaseId: t.phaseId ?? undefined,
+    reason: doneWhen,
+    detail: risk ? `风险：${risk}` : undefined,
+    text: `拆分：${t.title} → ${steps.length} 步（完成标准：${doneWhen}）`,
+    diff: kids.map((k) => ({ sign: '+' as const, num: numOf(ws, k.id), text: `☐ ${k.title}`, note: `↳ ${t.title}` })),
+  });
+  return kids;
+}
+
+/** Which of n new subtasks to start right away: "1 3", "1,2", "全部"/"all"; empty = none. */
+export function parseLanePick(text: string, n: number): number[] {
+  const s = text.trim().toLowerCase();
+  if (!s) return [];
+  if (s === 'all' || s === '全部' || s === '*') return Array.from({ length: n }, (_, i) => i);
+  const out = new Set<number>();
+  for (const part of s.split(/[\s,，、]+/).filter(Boolean)) {
+    const m = part.match(/^#?(\d+)(?:-(\d+))?$/) ?? fail(`看不懂「${part}」：填编号，如 1 2，或「全部」`);
+    const a = Number(m[1]);
+    const b = m[2] ? Number(m[2]) : a;
+    for (let k = a; k <= b; k++) {
+      if (k < 1 || k > n) fail(`没有第 ${k} 步（共 ${n} 步）`);
+      out.add(k - 1);
+    }
+  }
+  return [...out].sort((x, y) => x - y);
+}
+
+/**
+ * Submit the split questions: split, rerun what Fable refused (if anything), then start the
+ * chosen steps — in parallel in Fable, the first one only in the other tiers.
+ */
+export function submitSplit(d: AppState, taskId: string, v: SplitAnswers & { start: string }, retry?: (d: AppState) => unknown): string {
+  const kids = splitTask(d, taskId, v);
+  const pick = parseLanePick(v.start, kids.length);
+  const parent = taskList(requireWs(d)).find((x) => x.id === taskId)!;
+  const parts = [`已拆分「${parent.title}」→ ${kids.length} 步`];
+  const r = retry?.(d);
+  if (typeof r === 'string') parts.push(r);
+  const go = d.hie.tier === 'fable' ? pick : pick.slice(0, 1);
+  for (const i of go) parts.push(setTaskStatus(d, kids[i].id, 'active'));
+  if (go.length < pick.length) parts.push('其他步骤要在 Fable 档才能并行推进');
+  return parts.join('　→　');
 }
 
 // ───────────────────────── goal ─────────────────────────
@@ -644,12 +828,53 @@ export function addCheckpoint(d: AppState, goalId: string, cp: Omit<Checkpoint, 
 
 // ───────────────────────── HIE ─────────────────────────
 
-export function setTier(d: AppState, tier: Tier): string {
-  if (d.hie.tier !== tier) d.hie.updatedAt = Date.now();
+/**
+ * Tier change rules around Fable. Entering it: the task this device works on in the current
+ * workspace must be split first. Leaving it: one subtask per split task stays in progress,
+ * the others are paused — returned so the caller can say which.
+ */
+function changeTier(d: AppState, tier: Tier): string[] {
+  const from = d.hie.tier;
+  const paused: string[] = [];
+  if (tier === 'fable' && from !== 'fable') {
+    const ws = currentWs(d);
+    const cur = ws && currentTask(ws, d);
+    if (ws && cur && needsSplit(ws, cur)) throw new SplitRequired(cur.id, cur.title);
+  }
+  if (from === 'fable' && tier !== 'fable') {
+    for (const ws of [...d.plans, ...d.goals]) {
+      const seen = new Set<string>();
+      for (const t of activeLanes(ws, d)) {
+        if (!seen.has(t.parentId!)) {
+          seen.add(t.parentId!);
+          continue;
+        }
+        t.status = 'pending';
+        delete t.activeBy;
+        paused.push(t.title);
+      }
+    }
+  }
+  if (from !== tier) d.hie.updatedAt = Date.now();
   d.hie.tier = tier;
+  return paused;
+}
+
+const pausedNote = (paused: string[]) => (paused.length ? `　·　并行子任务只保留一路，已暂停：${paused.join('、')}` : '');
+
+export function setTier(d: AppState, tier: Tier): string {
+  const paused = changeTier(d, tier);
   const s = activeSession(d);
-  if (s && s.tier !== tier) splitSession(d, s, { tier });
-  return `模型档位 → ${TIERS[tier].label}`;
+  if (s && s.tier !== tier) splitSession(d, s, { tier, lanes: tier === 'fable' ? laneCount(d) : undefined });
+  return `模型档位 → ${TIERS[tier].label}${pausedNote(paused)}`;
+}
+
+/** A Fable session is priced by the subtasks in progress: a change in their number starts a new segment. */
+function syncLanes(d: AppState) {
+  const s = activeSession(d);
+  if (!s || s.tier !== 'fable') return;
+  const n = laneCount(d);
+  if ((s.lanes ?? 1) !== n) splitSession(d, s, { lanes: n });
 }
 
 export function setEffort(d: AppState, effort: Effort): string {
@@ -660,22 +885,42 @@ export function setEffort(d: AppState, effort: Effort): string {
   return `推理强度 → ${effort}`;
 }
 
-function splitSession(d: AppState, s: Session, patch: Partial<Pick<Session, 'tier' | 'effort'>>) {
+function splitSession(d: AppState, s: Session, patch: Partial<Pick<Session, 'tier' | 'effort' | 'lanes'>>) {
   const now = Date.now();
+  const next: Session = { ...s, ...patch, id: uid(), startedAt: now, endedAt: undefined, tokens: undefined, fatigue: undefined, outcome: undefined };
+  if (next.lanes == null || next.tier !== 'fable') delete next.lanes;
+  if (now - s.startedAt < 1000) {
+    // Several changes in one go (e.g. starting a few subtasks): no empty segments.
+    Object.assign(s, { tier: next.tier, effort: next.effort });
+    if (next.lanes != null) s.lanes = next.lanes;
+    else delete s.lanes;
+    return;
+  }
   s.endedAt = now;
   s.tokens = sessionTokens(s, now, latestFatigue(d, now));
-  d.sessions.push({ ...s, ...patch, id: uid(), startedAt: now, endedAt: undefined, tokens: undefined, fatigue: undefined, outcome: undefined });
+  d.sessions.push(next);
 }
 
 export function startSession(d: AppState, opts: { intent: string; plannedMin: number; tier: Tier; effort: Effort }): string {
   if (activeSession(d)) fail('已有进行中的 Session，先 /end 结束它');
   const ws = currentWs(d);
-  if (d.hie.tier !== opts.tier || d.hie.effort !== opts.effort) d.hie.updatedAt = Date.now();
-  d.hie.tier = opts.tier;
+  const paused = changeTier(d, opts.tier);
+  if (d.hie.effort !== opts.effort) d.hie.updatedAt = Date.now();
   d.hie.effort = opts.effort;
   const id = uid();
   const planned = Math.max(5, Math.round(opts.plannedMin) || 25);
-  d.sessions.push({ id, runId: id, wsId: ws?.id ?? null, tier: opts.tier, effort: opts.effort, intent: opts.intent.trim(), plannedMin: planned, startedAt: Date.now(), ...(d.ui.deviceId ? { device: d.ui.deviceId } : {}) });
+  d.sessions.push({
+    id,
+    runId: id,
+    wsId: ws?.id ?? null,
+    tier: opts.tier,
+    effort: opts.effort,
+    intent: opts.intent.trim(),
+    plannedMin: planned,
+    startedAt: Date.now(),
+    ...(d.ui.deviceId ? { device: d.ui.deviceId } : {}),
+    ...(opts.tier === 'fable' ? { lanes: laneCount(d) } : {}),
+  });
   if (ws) {
     emit(d, ws, {
       type: 'session-start',
@@ -685,7 +930,7 @@ export function startSession(d: AppState, opts: { intent: string; plannedMin: nu
       detail: `${TIERS[opts.tier].label} · ${opts.effort} · ${planned}m`,
     });
   }
-  return `Session 开始 · ${TIERS[opts.tier].label} / ${opts.effort} · 计划 ${planned} 分钟`;
+  return `Session 开始 · ${TIERS[opts.tier].label} / ${opts.effort} · 计划 ${planned} 分钟${pausedNote(paused)}`;
 }
 
 export function runSegments(d: Pick<AppState, 'sessions'>, runId: string): Session[] {
