@@ -1,0 +1,15 @@
+{
+  "appId": "app.automedo.ios",
+  "appName": "AuTomeDo",
+  "webDir": "../web/dist",
+  "backgroundColor": "#141413",
+  "ios": {
+    "contentInset": "never",
+    "scheme": "AuTomeDo"
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "iconColor": "#d97757"
+    }
+  }
+}

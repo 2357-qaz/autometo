@@ -1039,7 +1039,9 @@ function PushSection() {
           <span className="dim">检查中…</span>
         ) : st.kind === 'unsupported' ? (
           <span className="dim">
-            {st.reason === 'ios-install'
+            {st.reason === 'native'
+              ? 'iOS App 用本地通知提醒：专注到点、Checkpoint 到期、阶段逾期（第二天早上 9 点），不需要服务器推送。可以在 iPhone 的「设置 → 通知 → AuTomeDo」里开关。'
+              : st.reason === 'ios-install'
               ? '在 iPhone 上：先在 Safari 里点「分享 → 添加到主屏幕」，从主屏幕打开 AuTomeDo 后再来这里开启提醒（需要 iOS 16.4 及以上）。'
               : st.reason === 'no-sw'
                 ? '需要通过服务器托管的正式版本打开（开发模式下没有离线缓存，无法推送）。'

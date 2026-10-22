@@ -3,9 +3,12 @@ import { currentWs, execute, ops, type Store } from '@automedo/core';
 
 export const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 export const isStandalone = () => matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
+/** Running inside the iOS app (Capacitor injects its bridge before any page script). */
+export const isNativeApp = () => !!(window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.();
 
 export function registerServiceWorker(store: Store) {
-  if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return;
+  // The app ships its files itself; a service worker is neither needed nor supported there.
+  if (!import.meta.env.PROD || !('serviceWorker' in navigator) || isNativeApp()) return;
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js').catch((e) => console.warn('service worker registration failed', e));
   });
@@ -17,7 +20,11 @@ export function registerServiceWorker(store: Store) {
 
 function openWsFromUrl(store: Store, url: URL) {
   const id = url.searchParams.get('ws');
-  if (!id) return;
+  if (id) openWs(store, id);
+}
+
+/** Show a plan/goal (from a tapped notification), if it still exists. */
+export function openWs(store: Store, id: string) {
   const s = store.get();
   if (s.plans.some((p) => p.id === id) || s.goals.some((g) => g.id === id)) store.mutate(null, (d) => ops.selectWs(d, id));
 }

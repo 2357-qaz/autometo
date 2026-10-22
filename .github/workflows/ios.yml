@@ -1,0 +1,73 @@
+name: iOS
+
+# Builds an unsigned AuTomeDo.ipa (app + widget/Live Activity extension) on a macOS
+# runner. Sign and install it with a free Apple ID: see apps/mobile/README.md.
+# macOS minutes are costly, so this runs only when the iOS shell changes, or by hand
+# (Actions → iOS → Run workflow) to pick up web/core changes.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'apps/mobile/**'
+      - '.github/workflows/ios.yml'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the web app
+        run: npm run build -w @automedo/web
+
+      - name: Generate the Xcode project
+        working-directory: apps/mobile
+        run: |
+          brew install xcodegen
+          npx cap sync ios
+          cd ios/App && xcodegen generate
+
+      - name: Build (unsigned)
+        working-directory: apps/mobile/ios/App
+        run: |
+          xcodebuild -version
+          xcodebuild -project App.xcodeproj -scheme App -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            -quiet build
+
+      # Ad-hoc signatures carrying the entitlements, so the signing tool knows the app and
+      # its widget share an App Group (it registers one for the user's own Apple ID).
+      - name: Package the IPA
+        working-directory: apps/mobile/ios/App
+        run: |
+          APP=build/Build/Products/Release-iphoneos/App.app
+          if [ -d "$APP/Frameworks" ]; then
+            find "$APP/Frameworks" -maxdepth 1 \( -name '*.framework' -o -name '*.dylib' \) -exec codesign --force --sign - {} \;
+          fi
+          codesign --force --sign - --entitlements Widget/Widget.entitlements "$APP/PlugIns/AutomedoWidget.appex"
+          codesign --force --sign - --entitlements App/App.entitlements "$APP"
+          codesign -d --entitlements - "$APP/PlugIns/AutomedoWidget.appex"
+          mkdir -p ipa/Payload
+          cp -R "$APP" ipa/Payload/
+          (cd ipa && zip -qry ../AuTomeDo.ipa Payload)
+          ls -lh AuTomeDo.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AuTomeDo-ipa-${{ github.run_number }}
+          path: apps/mobile/ios/App/AuTomeDo.ipa
+          retention-days: 30
