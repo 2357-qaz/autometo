@@ -9,6 +9,7 @@ on:
   push:
     paths:
       - 'apps/mobile/**'
+      - '!apps/mobile/**/*.md'
       - '.github/workflows/ios.yml'
 
 defaults:
@@ -37,8 +38,9 @@ jobs:
         working-directory: apps/mobile
         run: |
           brew install xcodegen
+          (cd ios/App && xcodegen generate)
+          # After the project exists: sync reads it to write CapApp-SPM/Package.swift.
           npx cap sync ios
-          cd ios/App && xcodegen generate
 
       - name: Build (unsigned)
         working-directory: apps/mobile/ios/App
