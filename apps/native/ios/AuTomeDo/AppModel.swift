@@ -25,8 +25,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var output: Output?
     @Published private(set) var suggestions: [Suggestion] = []
     @Published private(set) var loadError: String?
-    /// Text to put into the prompt (and focus it), e.g. for a screenshot.
-    @Published var draft: String?
+    /// What is typed in the prompt (kept here so it can also be filled in, e.g. for a screenshot).
+    @Published var input = ""
 
     let engine: Engine
     /// Demo data never reaches the widget, the Live Activity or notifications.

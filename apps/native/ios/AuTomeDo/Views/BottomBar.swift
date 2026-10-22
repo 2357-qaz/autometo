@@ -3,7 +3,6 @@ import SwiftUI
 /// Pinned to the bottom, like the terminal: session line, last answer, command input, status line.
 struct BottomBar: View {
     @EnvironmentObject private var model: AppModel
-    @State private var input = ""
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -14,7 +13,7 @@ struct BottomBar: View {
                     .font(Theme.mono(12)).foregroundStyle(Theme.violet).lineLimit(1)
             }
             if let out = model.output { OutputLine(output: out) }
-            if (focused || input.hasPrefix("/")) && !model.suggestions.isEmpty { suggestions }
+            if (focused || model.input.hasPrefix("/")) && !model.suggestions.isEmpty { suggestions }
             prompt
             StatusLine()
         }
@@ -30,9 +29,9 @@ struct BottomBar: View {
             ForEach(model.suggestions.prefix(6)) { s in
                 Button {
                     if s.needsArg {
-                        input = "/\(s.name) "
+                        model.input = "/\(s.name) "
                     } else {
-                        input = ""
+                        model.input = ""
                         Task { await model.run("/\(s.name)") }
                     }
                 } label: {
@@ -51,27 +50,17 @@ struct BottomBar: View {
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 8))
     }
 
-    /// Text put into the input from elsewhere (a status-line tap, the screenshot mode).
-    private func takeDraft() {
-        guard let draft = model.draft else { return }
-        input = draft
-        focused = true
-        model.draft = nil
-    }
-
     private var prompt: some View {
         HStack(spacing: 8) {
             Text(">").foregroundStyle(Theme.fg2)
-            TextField(model.view?.ws == nil ? "输入计划标题，或 /help" : model.view?.mode == "goal" ? "添加行动…  / 命令  # 记录" : "添加任务…  / 命令  # 记录", text: $input)
+            TextField(model.view?.ws == nil ? "输入计划标题，或 /help" : model.view?.mode == "goal" ? "添加行动…  / 命令  # 记录" : "添加任务…  / 命令  # 记录", text: $model.input)
                 .focused($focused)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.send)
                 .onSubmit(send)
-                .onChange(of: input) { _, now in Task { await model.suggest(now) } }
-                .onChange(of: model.draft) { _, _ in takeDraft() }
-                .onAppear(perform: takeDraft)
-            if !input.isEmpty {
+                .onChange(of: model.input) { _, now in Task { await model.suggest(now) } }
+            if !model.input.isEmpty {
                 Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.title3) }
                     .foregroundStyle(Theme.accent)
             }
@@ -83,8 +72,8 @@ struct BottomBar: View {
     }
 
     private func send() {
-        let text = input
-        input = ""
+        let text = model.input
+        model.input = ""
         Task { await model.run(text) }
     }
 }

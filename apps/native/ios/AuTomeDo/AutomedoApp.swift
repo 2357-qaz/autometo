@@ -79,7 +79,8 @@ enum Screenshot {
         case "switcher":
             model.present(.switcher)
         case "command":
-            model.draft = "/re"
+            model.input = "/re"
+            await model.suggest("/re")
         default:
             break
         }
