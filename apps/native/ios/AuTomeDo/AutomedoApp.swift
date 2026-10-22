@@ -19,7 +19,7 @@ struct AutomedoApp: App {
         let defaults = demo ? (UserDefaults(suiteName: "automedo.demo") ?? .standard) : .standard
         if demo { defaults.removePersistentDomain(forName: "automedo.demo") }
         let engine = Engine(paths: .init(doc: base.appendingPathComponent("state.json"), aside: base.appendingPathComponent("aside", isDirectory: true)), defaults: defaults)
-        _model = StateObject(wrappedValue: AppModel(engine: engine))
+        _model = StateObject(wrappedValue: AppModel(engine: engine, defaults: defaults))
     }
 
     var body: some Scene {

@@ -17,7 +17,7 @@ struct RootView: View {
             }
             .background(Theme.bg)
             .floatingBottomBar { BottomBar() }
-            .toolbar { toolbar }
+            .appToolbar(leading: { leadingItem }, ring: { ToolbarItem(placement: .topBarTrailing) { UsageMenu() } }, trailing: { trailingItems })
             .toolbarBackground(Theme.bg, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
         }
@@ -42,8 +42,7 @@ struct RootView: View {
         }
     }
 
-    @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
+    private var leadingItem: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             Button { model.present(.switcher) } label: {
                 HStack(spacing: 6) {
@@ -54,6 +53,9 @@ struct RootView: View {
                 .font(Theme.mono(15))
             }
         }
+    }
+
+    private var trailingItems: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button { model.present(.timeline) } label: { Image(systemName: "text.alignleft") }
                 .disabled(model.view?.ws == nil)
@@ -71,7 +73,7 @@ struct RootView: View {
                 Divider()
                 Button { Task { await model.run("/help") } } label: { Label("全部命令", systemImage: "questionmark.circle") }
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(systemName: "ellipsis")
             }
         }
     }

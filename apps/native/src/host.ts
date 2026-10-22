@@ -8,7 +8,11 @@
 
 export interface Host {
   log(level: string, message: string): void;
-  /** The state document (null: none yet). Synchronous; `writeDoc` replaces it atomically. */
+  /**
+   * The state document; null only when there is none yet. Throws when it exists but cannot
+   * be read (`keptAside: true` on the error once the file has been moved aside intact).
+   * Synchronous; `writeDoc` replaces it atomically.
+   */
   readDoc(): string | null;
   writeDoc(text: string): void;
   /** Keep a copy that must not be lost (an unreadable document); throws if it cannot. */

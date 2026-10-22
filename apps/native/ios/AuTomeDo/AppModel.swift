@@ -27,15 +27,23 @@ final class AppModel: ObservableObject {
     @Published private(set) var loadError: String?
     /// What is typed in the prompt (kept here so it can also be filled in, e.g. for a screenshot).
     @Published var input = ""
+    /// Bumped to put the cursor into the prompt (the bottom bar watches it).
+    @Published private(set) var promptFocus = 0
+    /// Commands kept under the bottom bar's "+" (this device only).
+    @Published private(set) var savedCommands: [String]
 
     let engine: Engine
+    private let defaults: UserDefaults
+    private static let savedKey = "automedo.savedCommands"
     /// Demo data never reaches the widget, the Live Activity or notifications.
     private let surfaces: Surfaces? = Screenshot.isDemo ? nil : Surfaces()
     private var refreshing = false
     private var refreshAgain = false
 
-    init(engine: Engine) {
+    init(engine: Engine, defaults: UserDefaults = .standard) {
         self.engine = engine
+        self.defaults = defaults
+        savedCommands = defaults.stringArray(forKey: Self.savedKey) ?? []
         loadError = engine.loadError
         engine.onChange = { [weak self] in
             Task { @MainActor in await self?.refresh() }
@@ -152,12 +160,33 @@ final class AppModel: ObservableObject {
         handle(await engine.decode(ActionResult.self, "seedDemo"), cmd: "示例数据")
     }
 
+    /// Put text into the prompt and the cursor after it (e.g. a command that needs an argument).
+    func prompt(_ text: String) {
+        input = text
+        promptFocus += 1
+    }
+
+    func saveCommand(_ text: String) {
+        let command = text.trimmingCharacters(in: .whitespaces)
+        guard command.hasPrefix("/"), command.count > 1, !savedCommands.contains(command) else { return }
+        savedCommands.append(command)
+        defaults.set(savedCommands, forKey: Self.savedKey)
+    }
+
+    func removeCommand(_ command: String) {
+        savedCommands.removeAll { $0 == command }
+        defaults.set(savedCommands, forKey: Self.savedKey)
+    }
+
     func suggest(_ input: String) async {
         guard input.hasPrefix("/") else {
             suggestions = []
             return
         }
-        suggestions = await engine.decode([Suggestion].self, "suggest", ["input": input]) ?? []
+        let found = await engine.decode([Suggestion].self, "suggest", ["input": input]) ?? []
+        // Typing on while this was looked up: only the answer for what is in the prompt now counts.
+        guard input == self.input else { return }
+        suggestions = found
     }
 
     /// Leaving the app: write everything now; the widget and reminders follow.

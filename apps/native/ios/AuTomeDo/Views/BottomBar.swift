@@ -16,10 +16,7 @@ struct BottomBar: View {
                 if let out = model.output { OutputCard(output: out) }
                 if showSuggestions { suggestions.transition(.opacity.combined(with: .move(edge: .bottom))) }
                 prompt
-                StatusChips(prompt: { text in
-                    model.input = text
-                    focused = true
-                })
+                StatusChips()
             }
             .padding(.horizontal, 12)
             .padding(.top, 6)
@@ -28,6 +25,7 @@ struct BottomBar: View {
         .animation(.snappy(duration: 0.25), value: showSuggestions)
         .animation(.snappy(duration: 0.25), value: model.input.isEmpty)
         .animation(.snappy(duration: 0.25), value: model.output?.text)
+        .onChange(of: model.promptFocus) { _, _ in focused = true }
     }
 
     private var suggestions: some View {
@@ -210,80 +208,159 @@ private struct OutputCard: View {
     }
 }
 
-/// mode · model · effort · budget · fatigue · sync — one chip each; a tap opens its picker or form.
+/// Under the prompt: the mode, the model with its effort, and "+" for everything else.
 private struct StatusChips: View {
-    /// Puts a command that needs an argument into the prompt.
-    let prompt: (String) -> Void
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         if let st = model.view?.status {
-            VStack(alignment: .leading, spacing: 4) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        let goal = model.view?.mode == "goal"
-                        Chip(tint: (goal ? Theme.violet : Theme.teal).opacity(0.18)) {
-                            Task { await model.setMode(goal ? "plan" : "goal") }
-                        } label: {
-                            HStack(spacing: 5) {
-                                ModeIcon(goal: goal)
-                                Text(goal ? "goal" : "plan").foregroundStyle(goal ? Theme.violet : Theme.teal)
-                            }
-                        }
-                        Chip(tint: Theme.tier(st.tier).opacity(0.14)) { Task { await model.run("/model") } } label: {
-                            Text(st.lanes > 1 ? "\(st.tierLabel) ×\(st.lanes) 路" : st.tierLabel).fontWeight(.bold).foregroundStyle(Theme.tier(st.tier))
-                        }
-                        Chip { Task { await model.run("/effort") } } label: {
-                            EffortText(effort: st.effort)
-                        }
-                        Chip { prompt("/budget ") } label: {
-                            BudgetView(used: st.used, budget: st.budget, level: st.level)
-                        }
-                        Chip(tint: (st.fatigue ?? 0) >= 4 ? Theme.yellow.opacity(0.16) : nil) { Task { await model.run("/fatigue") } } label: {
-                            Text(st.fatigue.map { "疲劳 \($0)/5" + (st.fatigueMult > 1 ? " ×\(Self.mult(st.fatigueMult))" : "") } ?? "疲劳 –")
-                                .foregroundStyle((st.fatigue ?? 0) >= 4 ? Theme.yellow : Theme.fg2)
-                        }
-                        Chip(tint: syncTint(st.sync.tone)) { Task { await model.run("/sync") } } label: {
-                            SyncLabel(sync: st.sync)
-                        }
+            HStack(spacing: 8) {
+                let goal = model.view?.mode == "goal"
+                Button { Task { await model.setMode(goal ? "plan" : "goal") } } label: {
+                    HStack(spacing: 5) {
+                        ModeIcon(goal: goal)
+                        Text(goal ? "goal" : "plan").foregroundStyle(goal ? Theme.violet : Theme.teal)
                     }
-                    .padding(.vertical, 2)
+                    .chipLabel()
                 }
-                .scrollClipDisabled()
-                if let advice = st.advice {
-                    Text(advice.textGlyphs).font(.caption2).foregroundStyle(Theme.yellow).padding(.leading, 4)
-                }
+                .buttonStyle(.plain)
+                .glass(in: Capsule(), tint: (goal ? Theme.violet : Theme.teal).opacity(0.18), interactive: true)
+                ModelMenu(status: st)
+                Spacer(minLength: 0)
+                MoreMenu(status: st)
             }
         }
     }
+}
 
-    private func syncTint(_ tone: String) -> Color? {
-        switch tone {
-        case "red": return Theme.red.opacity(0.16)
-        case "yellow": return Theme.yellow.opacity(0.14)
-        default: return nil
+private struct Choice: Hashable {
+    let id: String
+    let label: String
+    let hint: String
+}
+
+/// Model tier and reasoning effort in one capsule; picking one runs /model or /effort
+/// (so Fable still asks to split the task in progress).
+private struct ModelMenu: View {
+    let status: ViewModel.Status
+    @EnvironmentObject private var model: AppModel
+
+    private static let tiers = [
+        Choice(id: "haiku", label: "Haiku", hint: "轻量：回复消息、整理、杂事"),
+        Choice(id: "sonnet", label: "Sonnet", hint: "常规：日常推进、写作、编码"),
+        Choice(id: "opus", label: "Opus", hint: "深度：难题、设计、需要整块专注"),
+        Choice(id: "fable", label: "Fable", hint: "编排：先拆分任务，再并行推进子任务"),
+    ]
+    private static let efforts = [
+        Choice(id: "low", label: "low", hint: "放松推进"),
+        Choice(id: "medium", label: "medium", hint: "正常投入"),
+        Choice(id: "high", label: "high", hint: "全力以赴"),
+    ]
+
+    var body: some View {
+        Menu {
+            Section("模型") {
+                ForEach(Self.tiers, id: \.self) { t in
+                    Button { Task { await model.run("/model \(t.id)") } } label: {
+                        if t.id == status.tier { Label(t.label, systemImage: "checkmark") } else { Text(t.label) }
+                        Text(t.hint)
+                    }
+                }
+            }
+            Section("推理强度") {
+                ForEach(Self.efforts, id: \.self) { e in
+                    Button { Task { await model.run("/effort \(e.id)") } } label: {
+                        if e.id == status.effort { Label(e.label, systemImage: "checkmark") } else { Text(e.label) }
+                        Text(e.hint)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Text(status.lanes > 1 ? "\(status.tierLabel) ×\(status.lanes)" : status.tierLabel)
+                    .fontWeight(.bold)
+                    .foregroundStyle(Theme.tier(status.tier))
+                EffortText(effort: status.effort)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.dim)
+            }
+            .chipLabel()
         }
+        .menuOrder(.fixed)
+        .glass(in: Capsule(), tint: Theme.tier(status.tier).opacity(0.14), interactive: true)
+    }
+}
+
+/// "+": saved commands, and the status that used to sit in the chips (fatigue, sync,
+/// budget). A dot on it when one of those needs a look.
+private struct MoreMenu: View {
+    let status: ViewModel.Status
+    @EnvironmentObject private var model: AppModel
+
+    private var attention: Color? {
+        if status.sync.tone == "red" { return Theme.red }
+        if status.sync.tone == "yellow" || (status.fatigue ?? 0) >= 4 { return Theme.yellow }
+        return nil
+    }
+
+    var body: some View {
+        Menu {
+            Section("常用命令") {
+                ForEach(model.savedCommands, id: \.self) { command in
+                    Button(command) { Task { await model.run(command) } }
+                }
+                let draft = model.input.trimmingCharacters(in: .whitespaces)
+                let savable = draft.hasPrefix("/") && draft.count > 1 && !model.savedCommands.contains(draft)
+                Button { model.saveCommand(draft) } label: {
+                    Label(savable ? "保存「\(draft)」" : "保存输入框里的命令", systemImage: "plus")
+                    if model.savedCommands.isEmpty { Text("先在输入框写好 / 命令") }
+                }
+                .disabled(!savable)
+                if !model.savedCommands.isEmpty {
+                    Menu {
+                        ForEach(model.savedCommands, id: \.self) { command in
+                            Button(command, role: .destructive) { model.removeCommand(command) }
+                        }
+                    } label: {
+                        Label("删除常用命令", systemImage: "trash")
+                    }
+                }
+            }
+            Section("状态") {
+                Button { Task { await model.run("/fatigue") } } label: {
+                    Label(status.fatigue.map { "疲劳 \($0)/5" + (status.fatigueMult > 1 ? "（Token ×\(Self.mult(status.fatigueMult))）" : "") } ?? "疲劳自评", systemImage: "battery.50percent")
+                }
+                Button { Task { await model.run("/sync") } } label: {
+                    let sync = syncParts(status.sync.text)
+                    Label(sync.text, systemImage: sync.symbol)
+                }
+                Button { model.prompt("/budget ") } label: {
+                    Label("每日预算 \(fmtTokens(status.budget))", systemImage: "gauge.with.dots.needle.33percent")
+                }
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.fg)
+                .frame(width: 46, height: 32)
+                .overlay(alignment: .topTrailing) {
+                    if let attention { Circle().fill(attention).frame(width: 7, height: 7).offset(x: -9, y: 5) }
+                }
+                .contentShape(Capsule())
+        }
+        .menuOrder(.fixed)
+        .glass(in: Capsule(), interactive: true)
     }
 
     static func mult(_ m: Double) -> String { m == m.rounded() ? String(Int(m)) : String(m) }
 }
 
-private struct Chip<Content: View>: View {
-    var tint: Color? = nil
-    let action: () -> Void
-    @ViewBuilder let label: Content
-
-    var body: some View {
-        Button(action: action) {
-            label
-                .font(Theme.mono(11))
-                .lineLimit(1)
-                .padding(.horizontal, 11)
-                .frame(height: 30)
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .glass(in: Capsule(), tint: tint, interactive: true)
+private extension View {
+    func chipLabel() -> some View {
+        font(Theme.mono(11))
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .frame(height: 32)
+            .contentShape(Capsule())
     }
 }
 
@@ -302,39 +379,9 @@ private struct EffortText: View {
     }
 }
 
-/// Today's tokens against the daily budget, as a small meter.
-private struct BudgetView: View {
-    let used: Double
-    let budget: Double
-    let level: String
-    var body: some View {
-        let ratio = budget > 0 ? min(1, used / budget) : 0
-        let color = level == "ok" ? Theme.teal : level == "warn" ? Theme.yellow : Theme.red
-        HStack(spacing: 6) {
-            Capsule().fill(Theme.faint.opacity(0.45))
-                .frame(width: 34, height: 5)
-                .overlay(alignment: .leading) { Capsule().fill(color).frame(width: max(ratio > 0 ? 5 : 0, 34 * ratio), height: 5) }
-            Text("\(fmtTokens(used))/\(fmtTokens(budget))").foregroundStyle(level == "ok" ? Theme.fg2 : color)
-        }
-    }
-}
-
-/// The engine's sync line with an SF Symbol in place of its leading glyph.
-private struct SyncLabel: View {
-    let sync: ViewModel.Status.Sync
-
-    var body: some View {
-        let parts = Self.split(sync.text)
-        HStack(spacing: 4) {
-            Image(systemName: parts.symbol)
-            Text(parts.text)
-        }
-        .foregroundStyle(sync.tone == "red" ? Theme.red : sync.tone == "yellow" ? Theme.yellow : sync.tone == "blue" ? Theme.blue : Theme.fg2)
-    }
-
-    static func split(_ text: String) -> (symbol: String, text: String) {
-        let symbols: [Character: String] = ["⟳": "arrow.triangle.2.circlepath", "⚠": "exclamationmark.triangle.fill", "⏸": "pause.circle.fill", "✓": "checkmark.icloud", "✗": "xmark.icloud"]
-        guard let first = text.first, let symbol = symbols[first] else { return ("iphone", text) }
-        return (symbol, text.dropFirst().trimmingCharacters(in: .whitespaces))
-    }
+/// The engine's sync line, its leading glyph as an SF Symbol.
+func syncParts(_ text: String) -> (symbol: String, text: String) {
+    let symbols: [Character: String] = ["⟳": "arrow.triangle.2.circlepath", "⚠": "exclamationmark.triangle.fill", "⏸": "pause.circle.fill", "✓": "checkmark.icloud", "✗": "xmark.icloud"]
+    guard let first = text.first, let symbol = symbols[first] else { return ("iphone", text) }
+    return (symbol, text.dropFirst().trimmingCharacters(in: .whitespaces))
 }

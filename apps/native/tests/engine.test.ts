@@ -15,6 +15,8 @@ const BUNDLE = readFileSync(join(import.meta.dirname, '..', 'dist', 'engine.js')
 
 interface Phone {
   doc: string | null;
+  /** Reading the document fails (it exists but is locked / not text). */
+  readFails?: { message: string; keptAside?: boolean };
   items: Map<string, string>;
   aside: { label: string; text: string }[];
   logs: string[];
@@ -31,7 +33,10 @@ function launch(disk: Phone = { doc: null, items: new Map(), aside: [], logs: []
   const A = () => ctx.Automedo as { start(): string; call(id: number, n: string, a: string): void; timer(id: number): void; fetched(...a: unknown[]): void };
   ctx.host = {
     log: (level: string, m: string) => void disk.logs.push(`${level}: ${m}`),
-    readDoc: () => disk.doc,
+    readDoc: () => {
+      if (disk.readFails) throw Object.assign(new Error(disk.readFails.message), { keptAside: disk.readFails.keptAside });
+      return disk.doc;
+    },
     writeDoc: (t: string) => void (disk.doc = t),
     saveAside: (label: string, text: string) => {
       if (opts.asideFails) throw new Error('disk full');
@@ -182,6 +187,24 @@ describe('engine in a JavaScriptCore-like context', () => {
     await stuck.idle();
     expect(stuck.disk.doc).toBe('{"plans":['); // never written over
     stuck.stop();
+  });
+
+  it('a document that exists but cannot be read is never replaced by a blank one', async () => {
+    const locked = launch({ doc: '{"plans":[]}', readFails: { message: '设备锁定中' }, items: new Map(), aside: [], logs: [] });
+    expect(locked.started.loadError).toMatch(/设备锁定中.*本次修改不会保存/);
+    await locked.call('execute', { input: '/plan 新的' });
+    await locked.idle();
+    expect(locked.disk.doc).toBe('{"plans":[]}');
+    locked.stop();
+
+    // Not text: the host moved it aside byte for byte, so starting blank is safe.
+    const moved = launch({ doc: null, readFails: { message: '不是 UTF-8 文本', keptAside: true }, items: new Map(), aside: [], logs: [] });
+    expect(moved.started.loadError).toMatch(/aside/);
+    moved.disk.readFails = undefined; // the file is gone now
+    await moved.call('execute', { input: '/plan 新的' });
+    await moved.idle();
+    expect(JSON.parse(moved.disk.doc!).plans[0].title).toBe('新的');
+    moved.stop();
   });
 
   it('syncs with a real server through the host fetch', async () => {

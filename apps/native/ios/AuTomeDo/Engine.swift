@@ -32,6 +32,42 @@ final class Engine: @unchecked Sendable {
     /// The last uncaught JavaScript error (also logged).
     private(set) var lastException: String?
 
+    enum DocumentRead: Equatable {
+        case missing
+        case text(String)
+        /// It exists but could not be read; `keptAside` once it was moved aside intact.
+        case failed(String, keptAside: Bool)
+    }
+
+    /// Tells "no document yet" from "a document that cannot be read" (locked before the
+    /// first unlock, no permission, I/O error, not UTF-8 text).
+    static func readDocument(_ paths: Paths) -> DocumentRead {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: paths.doc.path) else { return .missing }
+        let data: Data
+        do {
+            data = try Data(contentsOf: paths.doc)
+        } catch {
+            return .failed(error.localizedDescription, keptAside: false)
+        }
+        if let text = String(data: data, encoding: .utf8) { return .text(text) }
+        // Not text: it will never parse, so move it aside byte for byte; a blank start is then safe.
+        do {
+            try fm.moveItem(at: paths.doc, to: asideURL(paths, label: "unreadable", ext: "bin"))
+            return .failed("文件不是 UTF-8 文本", keptAside: true)
+        } catch {
+            return .failed("文件不是 UTF-8 文本，移到 aside 也失败了（\(error.localizedDescription)）", keptAside: false)
+        }
+    }
+
+    /// A new file in the aside folder: aside/<label>-<time>-<random>.<ext>.
+    static func asideURL(_ paths: Paths, label: String, ext: String) throws -> URL {
+        try FileManager.default.createDirectory(at: paths.aside, withIntermediateDirectories: true)
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
+        let name = "\(label.filter { $0.isLetter || $0.isNumber || $0 == "-" })-\(stamp)-\(UUID().uuidString.prefix(6)).\(ext)"
+        return paths.aside.appendingPathComponent(name)
+    }
+
     init(paths: Paths, defaults: UserDefaults = .standard, session: URLSession = .shared) {
         self.paths = paths
         self.defaults = defaults
@@ -106,7 +142,20 @@ final class Engine: @unchecked Sendable {
             NSLog("[engine %@] %@", level, message)
         }
         let readDoc: @convention(block) () -> String? = { [paths] in
-            try? String(contentsOf: paths.doc, encoding: .utf8)
+            switch Engine.readDocument(paths) {
+            case .missing:
+                return nil
+            case let .text(text):
+                return text
+            case let .failed(message, keptAside):
+                // Thrown in JavaScript: "no document" and "a document we cannot read" must
+                // never look the same, or a blank start would be saved over it.
+                if let ctx = JSContext.current(), let error = JSValue(newErrorFromMessage: message, in: ctx) {
+                    error.setValue(keptAside, forProperty: "keptAside")
+                    ctx.exception = error
+                }
+                return nil
+            }
         }
         let writeDoc: @convention(block) (String) -> Void = { [weak self, paths] text in
             do {
@@ -118,10 +167,7 @@ final class Engine: @unchecked Sendable {
         }
         let saveAside: @convention(block) (String, String) -> Void = { [weak self, paths] label, text in
             do {
-                try FileManager.default.createDirectory(at: paths.aside, withIntermediateDirectories: true)
-                let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
-                let name = "\(label.filter { $0.isLetter || $0.isNumber || $0 == "-" })-\(stamp)-\(UUID().uuidString.prefix(6)).json"
-                try Data(text.utf8).write(to: paths.aside.appendingPathComponent(name), options: [.atomic])
+                try Data(text.utf8).write(to: Engine.asideURL(paths, label: label, ext: "json"), options: [.atomic])
             } catch {
                 self?.fail("另存失败：\(error.localizedDescription)")
             }

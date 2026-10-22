@@ -72,6 +72,61 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(aside.count, 1)
     }
 
+    func testADocumentThatCannotBeReadIsNeverOverwritten() async throws {
+        let dir = temp()
+        let doc = dir.appendingPathComponent("state.json")
+        let original = Data("{\"plans\":[]}".utf8)
+        try original.write(to: doc)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: doc.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: doc.path) }
+        let e = engine(dir)
+        XCTAssertEqual(e.loadError?.contains("不会保存"), true, e.loadError ?? "no load error")
+        _ = await e.call("execute", ["input": "/plan 新的"])
+        _ = await e.call("flush")
+        try await Task.sleep(nanoseconds: 500_000_000)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: doc.path)
+        XCTAssertEqual(try Data(contentsOf: doc), original)
+    }
+
+    func testADocumentThatIsNotTextIsMovedAsideIntact() async throws {
+        let dir = temp()
+        let bytes = Data([0x7B, 0xFF, 0xFE, 0x7D])
+        try bytes.write(to: dir.appendingPathComponent("state.json"))
+        let e = engine(dir)
+        XCTAssertEqual(e.loadError?.contains("aside"), true, e.loadError ?? "no load error")
+        let aside = try FileManager.default.contentsOfDirectory(at: dir.appendingPathComponent("aside"), includingPropertiesForKeys: nil)
+        XCTAssertEqual(aside.count, 1)
+        XCTAssertEqual(try Data(contentsOf: aside[0]), bytes)
+        _ = await e.call("execute", ["input": "/plan 新的"])
+        _ = await e.call("flush")
+        try await Task.sleep(nanoseconds: 500_000_000)
+        let saved = try String(contentsOf: dir.appendingPathComponent("state.json"), encoding: .utf8)
+        XCTAssertTrue(saved.contains("新的"))
+    }
+
+    @MainActor
+    func testSuggestionsForTextNoLongerInThePromptAreDropped() async {
+        let model = AppModel(engine: engine(temp()), defaults: UserDefaults(suiteName: "tests.\(UUID().uuidString)")!)
+        model.input = "/help"
+        await model.suggest("/re") // answered after the prompt moved on
+        XCTAssertTrue(model.suggestions.isEmpty)
+        await model.suggest("/help")
+        XCTAssertEqual(model.suggestions.first?.name, "help")
+    }
+
+    @MainActor
+    func testSavedCommandsAreKept() {
+        let defaults = UserDefaults(suiteName: "tests.\(UUID().uuidString)")!
+        let model = AppModel(engine: engine(temp()), defaults: defaults)
+        model.saveCommand("/session 25 ")
+        model.saveCommand("/session 25")
+        model.saveCommand("不是命令")
+        XCTAssertEqual(model.savedCommands, ["/session 25"])
+        XCTAssertEqual(AppModel(engine: engine(temp()), defaults: defaults).savedCommands, ["/session 25"])
+        model.removeCommand("/session 25")
+        XCTAssertEqual(model.savedCommands, [])
+    }
+
     func testTheWidgetSnapshotDecodes() async throws {
         let e = engine(temp())
         _ = await e.call("seedDemo")

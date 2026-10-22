@@ -69,8 +69,22 @@ export function createEngine(host: Host) {
       host.writeDoc(t);
     },
   });
-  const loaded = persistence.load();
   let loadError: string | null = null;
+  let loaded: ReturnType<typeof persistence.load>;
+  try {
+    loaded = persistence.load();
+  } catch (e) {
+    // The file is there but could not be read (locked before the first unlock, no
+    // permission, not text…): never start blank over it.
+    const err = e as Error & { keptAside?: boolean };
+    loaded = { state: emptyState(), error: null, raw: null };
+    if (err.keptAside) {
+      loadError = `数据文件读取失败：${err.message}。原文件已原样移到 App 的 aside 文件夹，这次从空白开始。`;
+    } else {
+      blocked = '数据文件读取失败，为避免覆盖原文件，已停用保存';
+      loadError = `数据文件读取失败：${err.message}。为避免覆盖原文件，本次修改不会保存；请稍后重新打开 App。`;
+    }
+  }
   if (loaded.error) {
     // Keep the unreadable document: nothing may be written before it is safe somewhere.
     try {
