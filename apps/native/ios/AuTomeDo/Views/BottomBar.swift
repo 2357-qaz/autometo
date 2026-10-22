@@ -14,7 +14,7 @@ struct BottomBar: View {
                     .font(Theme.mono(12)).foregroundStyle(Theme.violet).lineLimit(1)
             }
             if let out = model.output { OutputLine(output: out) }
-            if focused && !model.suggestions.isEmpty { suggestions }
+            if (focused || input.hasPrefix("/")) && !model.suggestions.isEmpty { suggestions }
             prompt
             StatusLine()
         }
@@ -51,6 +51,14 @@ struct BottomBar: View {
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 8))
     }
 
+    /// Text put into the input from elsewhere (a status-line tap, the screenshot mode).
+    private func takeDraft() {
+        guard let draft = model.draft else { return }
+        input = draft
+        focused = true
+        model.draft = nil
+    }
+
     private var prompt: some View {
         HStack(spacing: 8) {
             Text(">").foregroundStyle(Theme.fg2)
@@ -61,12 +69,8 @@ struct BottomBar: View {
                 .submitLabel(.send)
                 .onSubmit(send)
                 .onChange(of: input) { _, now in Task { await model.suggest(now) } }
-                .onChange(of: model.draft) { _, draft in
-                    guard let draft else { return }
-                    input = draft
-                    focused = true
-                    model.draft = nil
-                }
+                .onChange(of: model.draft) { _, _ in takeDraft() }
+                .onAppear(perform: takeDraft)
             if !input.isEmpty {
                 Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.title3) }
                     .foregroundStyle(Theme.accent)

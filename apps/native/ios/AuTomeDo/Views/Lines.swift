@@ -48,6 +48,21 @@ struct LinesView: View {
     }
 }
 
+/// Unwrapped lines scroll both ways, starting at the top-left like a terminal (a 2D
+/// ScrollView otherwise centres content and opens in the middle of it).
+struct PanningScroll<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        GeometryReader { geo in
+            ScrollView([.vertical, .horizontal]) {
+                content.frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: .topLeading)
+            }
+            .defaultScrollAnchor(.topLeading)
+        }
+    }
+}
+
 struct LinesSheet: View {
     let title: String
     let lines: [Line]
@@ -55,9 +70,7 @@ struct LinesSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView([.vertical, .horizontal]) {
-                LinesView(lines: lines, wrap: false).padding()
-            }
+            PanningScroll { LinesView(lines: lines, wrap: false).padding() }
             .background(Theme.bg)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
@@ -101,9 +114,7 @@ struct ReviewSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView([.vertical, .horizontal]) {
-                LinesView(lines: review.lines, size: 11.5, wrap: false).padding()
-            }
+            PanningScroll { LinesView(lines: review.lines, size: 11.5, wrap: false).padding() }
             .background(Theme.bg)
             .navigationTitle(review.title)
             .navigationBarTitleDisplayMode(.inline)
