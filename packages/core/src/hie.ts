@@ -50,6 +50,18 @@ function sessionRate(s: Session, fatigue: number | null): number {
   return ratePerMin(s.tier, s.effort, fatigue);
 }
 
+/** Each session's share of [from, to): focused time and tokens (running ones up to `now`). */
+export function sessionUsage(state: Pick<AppState, 'sessions' | 'fatigue'>, from: number, to: number, now = Date.now()): { s: Session; ms: number; tokens: number }[] {
+  const fat = latestFatigue(state, now);
+  const out: { s: Session; ms: number; tokens: number }[] = [];
+  for (const s of state.sessions) {
+    const a = Math.max(from, s.startedAt);
+    const b = Math.min(to, s.endedAt ?? now, now);
+    if (b > a) out.push({ s, ms: b - a, tokens: Math.round(((b - a) / 60_000) * sessionRate(s, fat)) });
+  }
+  return out;
+}
+
 export function estimateTokens(tier: Tier, effort: Effort, minutes: number, fatigue?: number | null): number {
   return Math.round(minutes * ratePerMin(tier, effort, fatigue));
 }

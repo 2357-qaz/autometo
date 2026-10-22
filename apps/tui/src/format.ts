@@ -15,6 +15,11 @@ import {
   type Tier,
   type Workspace,
   type AppState,
+  type Review,
+  delta,
+  fmtSpan,
+  reviewLabels,
+  reviewTitle,
 } from '@automedo/core';
 import { checkpointDue, currentPhase, currentTask, diffSummary, dueAt, fmtAgo, nextCheckpointAt, orderedTasks, otherActiveTasks, type Goal } from './core-ops';
 
@@ -254,6 +259,78 @@ export function planDiffLines(p: Plan, v?: number): Line[] {
   );
   const versions = p.versions.map((x) => `v${x.v}`).join(' ');
   return [[], ...tool('Diff', `v${d.base.v} → 现在`, C.blue, [seg(versions, C.faint)], body)];
+}
+
+/** The weekly review as a transcript block. */
+export function reviewLines(r: Review): Line[] {
+  const t = r.totals;
+  const p = r.previous;
+  const deltaSeg = (now: number, before: number, f: (n: number) => string = String) => {
+    const d = delta(now, before, f);
+    return seg(` (${d})`, d === '持平' ? C.faint : now > before ? C.green : C.dim);
+  };
+  const body: Line[] = [
+    [
+      seg(`完成 ${t.done} 项`, C.fg, { b: true }), deltaSeg(t.done, p.done),
+      seg(' · ', C.faint), seg(`专注 ${t.focusMs ? fmtSpan(t.focusMs) : '0'}`, C.fg), deltaSeg(t.focusMs, p.focusMs, fmtSpan),
+      seg(' · ', C.faint), seg(`${fmtTokens(t.tokens)} tokens`, C.fg2),
+      seg(' · ', C.faint), seg(`${t.activeDays} 天有投入`, C.dim),
+    ],
+  ];
+  if (r.insights.length) {
+    body.push([], [seg('值得注意', C.yellow, { b: true })]);
+    for (const x of r.insights) body.push([seg(' ! ', C.yellow), seg(x, C.fg2)]);
+  }
+  // Days: focus, a token bar against the daily budget, fatigue, done.
+  const scale = Math.max(r.budget, ...r.days.map((d) => d.tokens));
+  body.push([], [seg('每天', C.fg, { b: true }), seg('            专注     tokens（每格 ≈ ' + fmtTokens(scale / 12) + '）     疲劳  完成', C.faint)]);
+  for (const d of r.days) {
+    const fat = d.fatigue == null ? seg(' – ', C.faint) : seg(` ${d.fatigue} `, d.fatigue >= 4 ? C.yellow : C.dim);
+    body.push([
+      seg(` ${reviewLabels.weekday(d.start)} ${fmtDate(d.start).slice(5)}  `, d.focusMs || d.done ? C.fg2 : C.faint),
+      seg(pad(d.focusMs ? fmtSpan(d.focusMs) : '–', 9), C.dim),
+      seg(bar(d.tokens ? Math.max(1 / 12, d.tokens / scale) : 0, 12), d.overBudget ? C.red : d.tokens ? C.accent : C.faint), // any work shows at least one cell
+      seg(pad(` ${d.tokens ? fmtTokens(d.tokens) : ''}${d.overBudget ? ' ⚠' : ''}`, 9), d.overBudget ? C.red : C.dim),
+      fat,
+      seg(`   ${d.done || '–'}`, d.done ? C.green : C.faint),
+    ]);
+  }
+  if (r.workspaces.length) {
+    body.push([], [seg('计划与目标', C.fg, { b: true })]);
+    for (const w of r.workspaces) {
+      const meta = [w.focusMs && `${fmtSpan(w.focusMs)} · ${fmtTokens(w.tokens)}`, `完成 ${w.done.length}`, w.added && `新增 ${w.added}`].filter(Boolean).join(' · ');
+      body.push([seg(w.kind === 'plan' ? ' ⏸ ' : ' ⏵⏵ ', w.kind === 'plan' ? C.teal : C.violet), seg(w.title, C.fg), seg(`  ${meta}`, C.dim)]);
+      if (w.done.length) {
+        const shown = w.done.slice(0, 5);
+        body.push([seg('     '), ...shown.flatMap((x, i) => [seg(i ? '  ' : ''), seg('✓ ', C.green), seg(x, C.fg2)]), ...(w.done.length > shown.length ? [seg(`  … 还有 ${w.done.length - shown.length} 项`, C.faint)] : [])]);
+      }
+      for (const c of w.checkpoints) body.push([seg('     Checkpoint ', C.faint), seg(`${fmtDate(c.at).slice(5)} · ${c.progress}% · ${reviewLabels.verdict[c.verdict]}`, c.verdict === 'on-track' ? C.green : C.yellow)]);
+    }
+  }
+  if (r.drift.length) {
+    body.push([], [seg('偏离与修正', C.fg, { b: true }), seg('  原因是复盘最有价值的部分', C.faint)]);
+    for (const d of r.drift.slice(-12)) {
+      body.push([
+        seg(` ${reviewLabels.weekday(d.at)} `, C.faint),
+        seg(reviewLabels.drift[d.type], d.type === 'revise' ? C.yellow : d.type === 'block' ? C.red : C.dim),
+        seg(`「${d.title}」`, C.fg2),
+        seg(`（${d.ws}）`, C.faint),
+        ...(d.reason ? [seg('：', C.faint), seg(d.reason, C.fg)] : []),
+      ]);
+    }
+    if (r.drift.length > 12) body.push([seg(`  … 更早还有 ${r.drift.length - 12} 条`, C.faint)]);
+  }
+  const focus = r.tiers.haiku + r.tiers.sonnet + r.tiers.opus;
+  if (focus) {
+    const tiers = (['haiku', 'sonnet', 'opus'] as Tier[]).filter((x) => r.tiers[x]);
+    body.push([], [
+      seg('投入方式  ', C.fg, { b: true }),
+      ...tiers.flatMap((x, i) => [seg(i ? ' · ' : '', C.faint), ...tierSegs(x), seg(` ${fmtSpan(r.tiers[x])}`, C.dim)]),
+      ...(r.overrun != null ? [seg('   Session 实际用时 / 计划 ', C.faint), seg(`${Math.round(r.overrun * 100)}%`, r.overrun >= 1.3 ? C.yellow : C.dim)] : []),
+    ]);
+  }
+  const hint = r.range.offset === 0 ? '/review last 看上周' : `/review ${r.range.offset - 1} 再往前一周`;
+  return [[], ...tool('Review', reviewTitle(r), C.violet, [seg(hint, C.faint)], body)];
 }
 
 // Tomo, the pixel notebook, drawn with half blocks (two pixel rows per text row).

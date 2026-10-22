@@ -528,3 +528,24 @@ html, body { overscroll-behavior: none; }
 .main, .bottom { min-width: 0; }
 .chips, .dock, .prompt-wrap, .statusline { max-width: min(860px, 100%); min-width: 0; }
 .dialog-actions { flex-wrap: wrap; row-gap: 8px; }
+
+/* weekly review */
+.review-sum { margin-bottom: 6px; }
+.review-notes, .review-drift { margin: 4px 0 8px; padding-left: 1.2em; }
+.review-notes li { color: var(--fg); }
+.review-days { display: grid; gap: 3px; margin-bottom: 6px; }
+.review-day { display: grid; grid-template-columns: 6.5em 4.8em 1fr 4em 1.6em 2.4em; gap: 8px; align-items: center; }
+.review-day.idle { opacity: 0.55; }
+.review-day .barbox { position: relative; height: 0.8em; background: var(--line); border-radius: 2px; }
+.review-day .barfill { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 2px; }
+.review-day .barfill.over { background: var(--red); }
+.review-day .budget { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--dim); }
+.review-day > span { white-space: nowrap; }
+.review-day .t, .review-day .fat, .review-day .n { text-align: right; }
+.review-ws { margin: 6px 0; }
+.review-done { display: flex; flex-wrap: wrap; gap: 4px 14px; padding-left: 1.6em; color: var(--fg); }
+.review-tiers { margin-top: 8px; }
+@media (max-width: 560px) {
+  .review-day { grid-template-columns: 2.4em 4.6em 1fr 3.4em 1em 2em; gap: 6px; font-size: 13px; }
+  .review-day .date { display: none; }
+}

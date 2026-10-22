@@ -4,6 +4,8 @@ import { render } from 'ink';
 import {
   activeSession,
   COMMANDS,
+  generateReview,
+  reviewMarkdown,
   createStore,
   currentWs,
   execute,
@@ -14,7 +16,7 @@ import {
   type Store,
 } from '@automedo/core';
 import { toAnsi } from './ansi';
-import { C, dockLines, eventLines, historyBlocks, planDiffLines, wsHeaderLines, type Line } from './format';
+import { C, dockLines, eventLines, historyBlocks, planDiffLines, reviewLines, wsHeaderLines, type Line } from './format';
 import { attachStore, filePersist, fileSyncStorage, homeDir, loadState, reloadState, watchState } from './storage';
 import { App } from './ui';
 
@@ -33,6 +35,7 @@ const USAGE = `AuTomeDo ${VERSION} — 像编写 Agent 计划一样组织自己�
   automedo status              当前 Plan/Goal、当前任务与 Todo
   automedo log [-n 50]         Execution Log
   automedo diff [v]            Plan Diff
+  automedo review [last] [--md]  周回顾（--md 输出 Markdown，可以存进笔记）
   automedo ls                  列出所有 Plan / Goal
   automedo use <名称或序号>     切换当前 Plan / Goal
   automedo sync                立即同步（需先在界面里 /sync 连接）
@@ -88,6 +91,14 @@ async function oneShot(argv: string[]) {
         if (!ws) fail('还没有打开的 Plan/Goal');
         const n = Number(rest[rest.indexOf('-n') + 1]) || 50;
         return out([...wsHeaderLines(ws!), ...historyBlocks(ws!, s.sessions, n).flatMap((b) => b.lines)]);
+      }
+      case 'review': {
+        const md = rest.includes('--md');
+        const a = rest.filter((x) => x !== '--md').join(' ').trim();
+        const offset = !a ? 0 : a === 'last' || a === '上周' ? -1 : /^-\d+$/.test(a) ? Number(a) : NaN;
+        if (Number.isNaN(offset)) fail('用法：automedo review [last|-n] [--md]');
+        const r = generateReview(s, offset);
+        return md ? void process.stdout.write(reviewMarkdown(r) + '\n') : out(reviewLines(r));
       }
       case 'diff': {
         if (ws?.kind !== 'plan') fail('Plan Diff 只适用于 Plan。用 automedo use 切换到一个 Plan');

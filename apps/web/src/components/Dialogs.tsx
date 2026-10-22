@@ -7,7 +7,7 @@ import { activeSession, EFFORT_ORDER, EFFORTS, estimateTokens, FATIGUE_LABELS, f
 import { ops } from '@automedo/core';
 import { activePlan, currentWs, findWs } from '@automedo/core';
 import type { Effort, Tier, Verdict, Workspace } from '@automedo/core';
-import { describeConflict, describeGuard, fieldLabel, fmtAgo, fmtDuration, fmtTokens, pickSpec, type ConflictNote, type PickKind } from '@automedo/core';
+import { delta, describeConflict, describeGuard, fieldLabel, fmtAgo, fmtDuration, fmtSpan, fmtTokens, generateReview, pickSpec, reviewLabels, reviewMarkdown, reviewTitle, type ConflictNote, type PickKind, type Review } from '@automedo/core';
 import { EffortLabel, TierLabel } from './Hie';
 import { useSyncStatus } from '../sync';
 import { disablePush, enablePush, pushState, testPush, type PushState } from '../push';
@@ -110,6 +110,8 @@ export function DialogHost({ dialog }: { dialog: Dialog }) {
       return <Confirm {...dialog} />;
     case 'pick':
       return <Pick what={dialog.what} />;
+    case 'review':
+      return <ReviewDialog offset={dialog.offset} />;
   }
 }
 
@@ -519,6 +521,114 @@ const KEYS: [string, string][] = [
   ['?', '打开帮助'],
   ['Esc', '关闭弹窗 / 离开输入框'],
 ];
+
+/** Weekly review: browse weeks, copy as Markdown. */
+function ReviewDialog({ offset: initial }: { offset: number }) {
+  const { state } = useApp();
+  const [offset, setOffset] = useState(initial);
+  const [copied, setCopied] = useState(false);
+  const r = generateReview(state, offset);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(reviewMarkdown(r));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable (e.g. not https) */
+    }
+  };
+  return (
+    <Shell
+      wide
+      title={<><span className="violet">⏺</span> 周回顾 · {reviewTitle(r)}</>}
+      actions={
+        <>
+          <button type="button" className="btn" onClick={() => setOffset(offset - 1)}>‹ 上一周</button>
+          <button type="button" className="btn" disabled={offset >= 0} onClick={() => setOffset(Math.min(0, offset + 1))}>下一周 ›</button>
+          <button type="button" className="btn" onClick={() => void copy()}>{copied ? '已复制' : '复制 Markdown'}</button>
+        </>
+      }
+    >
+      <ReviewBody r={r} />
+    </Shell>
+  );
+}
+
+function ReviewBody({ r }: { r: Review }) {
+  const t = r.totals;
+  const p = r.previous;
+  const Delta = ({ now, before, f }: { now: number; before: number; f?: (n: number) => string }) => {
+    const d = delta(now, before, f);
+    return <span className={d === '持平' ? 'faint' : now > before ? 'green' : 'dim'}> ({d})</span>;
+  };
+  const scale = Math.max(r.budget, ...r.days.map((d) => d.tokens));
+  const focus = r.tiers.haiku + r.tiers.sonnet + r.tiers.opus;
+  return (
+    <div className="review">
+      <div className="review-sum">
+        <b>完成 {t.done} 项</b><Delta now={t.done} before={p.done} /> · 专注 {fmtSpan(t.focusMs)}<Delta now={t.focusMs} before={p.focusMs} f={fmtSpan} /> · <span className="dim">{fmtTokens(t.tokens)} tokens · {t.activeDays} 天有投入</span>
+      </div>
+      {r.insights.length > 0 && (
+        <>
+          <div className="help-sec yellow">值得注意</div>
+          <ul className="review-notes">{r.insights.map((x) => <li key={x}>{x}</li>)}</ul>
+        </>
+      )}
+      <div className="help-sec">每天</div>
+      <div className="review-days">
+        {r.days.map((d) => (
+          <div key={d.start} className={`review-day ${d.focusMs || d.done ? '' : 'idle'}`}>
+            <span className="d">{reviewLabels.weekday(d.start)} <span className="faint date">{new Date(d.start).getMonth() + 1}/{new Date(d.start).getDate()}</span></span>
+            <span className="f dim">{d.focusMs ? fmtSpan(d.focusMs) : '–'}</span>
+            <span className="barbox" title={`${fmtTokens(d.tokens)} tokens / 预算 ${fmtTokens(r.budget)}`}>
+              <span className={`barfill ${d.overBudget ? 'over' : ''}`} style={{ width: d.tokens ? `max(3px, ${(d.tokens / scale) * 100}%)` : 0 }} />
+              <span className="budget" style={{ left: `${(r.budget / scale) * 100}%` }} />
+            </span>
+            <span className={`t ${d.overBudget ? 'red' : 'dim'}`}>{d.tokens ? fmtTokens(d.tokens) : ''}</span>
+            <span className={`fat ${d.fatigue != null && d.fatigue >= 4 ? 'yellow' : 'dim'}`} title="当天最高疲劳">{d.fatigue ?? '–'}</span>
+            <span className={`n ${d.done ? 'green' : 'faint'}`} title="完成">{d.done ? `✓${d.done}` : '–'}</span>
+          </div>
+        ))}
+      </div>
+      {r.workspaces.length > 0 && (
+        <>
+          <div className="help-sec">计划与目标</div>
+          {r.workspaces.map((w) => (
+            <div key={w.id} className="review-ws">
+              <div>
+                <span className={w.kind === 'plan' ? 'teal' : 'violet'}>{w.kind === 'plan' ? '⏸' : '⏵⏵'}</span> <b>{w.title}</b>
+                <span className="dim">  {[w.focusMs && `${fmtSpan(w.focusMs)} · ${fmtTokens(w.tokens)}`, `完成 ${w.done.length}`, w.added && `新增 ${w.added}`].filter(Boolean).join(' · ')}</span>
+              </div>
+              {w.done.length > 0 && <div className="review-done">{w.done.map((x, i) => <span key={i}><span className="green">✓</span> {x}</span>)}</div>}
+              {w.checkpoints.map((c) => (
+                <div key={c.at} className={c.verdict === 'on-track' ? 'green' : 'yellow'}>Checkpoint {new Date(c.at).getMonth() + 1}/{new Date(c.at).getDate()} · {c.progress}% · {reviewLabels.verdict[c.verdict]}</div>
+              ))}
+            </div>
+          ))}
+        </>
+      )}
+      {r.drift.length > 0 && (
+        <>
+          <div className="help-sec">偏离与修正 <span className="faint">· 原因是复盘最有价值的部分</span></div>
+          <ul className="review-drift">
+            {r.drift.map((d, i) => (
+              <li key={i}>
+                <span className="faint">{reviewLabels.weekday(d.at)}</span> <span className={d.type === 'revise' ? 'yellow' : d.type === 'block' ? 'red' : 'dim'}>{reviewLabels.drift[d.type]}</span>「{d.title}」<span className="faint">（{d.ws}）</span>
+                {d.reason && <>：{d.reason}</>}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {focus > 0 && (
+        <div className="dim review-tiers">
+          投入方式：{(['haiku', 'sonnet', 'opus'] as const).filter((x) => r.tiers[x]).map((x) => `${TIERS[x].label} ${fmtSpan(r.tiers[x])}`).join(' · ')}
+          {r.overrun != null && <> · Session 实际用时 / 计划 <span className={r.overrun >= 1.3 ? 'yellow' : ''}>{Math.round(r.overrun * 100)}%</span></>}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function Help() {
   return (

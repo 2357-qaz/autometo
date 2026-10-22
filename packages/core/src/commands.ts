@@ -251,6 +251,17 @@ export const COMMANDS: Command[] = [
       c.open({ type: 'resume', compactId: last.id });
     },
   },
+  {
+    name: 'review',
+    args: '[last|-n]',
+    desc: '周回顾：完成了什么、偏离与原因、时间和 token 花在哪（last：上周）',
+    run: (a, c) => {
+      const arg = a.trim().toLowerCase();
+      const offset = !arg ? 0 : arg === 'last' || arg === '上周' ? -1 : /^-\d+$/.test(arg) ? Number(arg) : NaN;
+      if (Number.isNaN(offset)) return { text: '用法：/review（本周）、/review last（上周）、/review -2（两周前）', error: true };
+      c.open({ type: 'review', offset });
+    },
+  },
   { name: 'rename', args: '<新标题>', desc: '重命名当前 Plan/Goal', run: (a, c) => mut(c, '重命名', (d) => ops.renameWs(d, ops.requireWs(d).id, a)) },
   {
     name: 'status',

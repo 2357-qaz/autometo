@@ -137,6 +137,17 @@ describe('interactive app', () => {
     t.unmount();
   });
 
+  it('/review prints the weekly review into the transcript', async () => {
+    const t = setup(true);
+    await t.type('/review');
+    await t.key(ENTER);
+    const out = t.all();
+    expect(out).toContain('Review(本周');
+    expect(out).toContain('每天');
+    expect(out).toMatch(/完成 \d+ 项/);
+    t.unmount();
+  });
+
   it('suggests and runs slash commands, prints errors inline', async () => {
     const t = setup(true);
     await wait();
