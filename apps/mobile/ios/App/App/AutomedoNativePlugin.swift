@@ -13,17 +13,23 @@ public class AutomedoNativePlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "loadBackup", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "saveBackup", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "saveAside", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setGlance", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "syncActivity", returnType: CAPPluginReturnPromise),
     ]
 
-    /// Application Support/AuTomeDo/state.json (included in device backups).
-    private func backupURL() throws -> URL {
-        let dir = try FileManager.default
+    /// Application Support/AuTomeDo (included in device backups).
+    private func directory(_ sub: String? = nil) throws -> URL {
+        var dir = try FileManager.default
             .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("AuTomeDo", isDirectory: true)
+        if let sub { dir.appendPathComponent(sub, isDirectory: true) }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("state.json")
+        return dir
+    }
+
+    private func backupURL() throws -> URL {
+        try directory().appendingPathComponent("state.json")
     }
 
     @objc func loadBackup(_ call: CAPPluginCall) {
@@ -43,6 +49,20 @@ public class AutomedoNativePlugin: CAPPlugin, CAPBridgedPlugin {
             call.resolve()
         } catch {
             call.reject("写入备份失败：\(error.localizedDescription)")
+        }
+    }
+
+    /// aside/<label>-<time>.json: a copy that must not be lost (never overwritten).
+    @objc func saveAside(_ call: CAPPluginCall) {
+        guard let text = call.getString("text") else { return call.reject("缺少 text") }
+        let label = (call.getString("label") ?? "copy").filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
+        do {
+            let url = try directory("aside").appendingPathComponent("\(label)-\(stamp)-\(UUID().uuidString.prefix(6)).json")
+            try Data(text.utf8).write(to: url, options: [.atomic])
+            call.resolve()
+        } catch {
+            call.reject("保存副本失败：\(error.localizedDescription)")
         }
     }
 

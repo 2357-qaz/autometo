@@ -114,6 +114,22 @@ export function mergeDocs(base: AppState, ours: { state: AppState; meta: SyncMet
   return { state: compose(merged.values(), ours.state.ui), meta: mergeMeta(ours.meta, theirs.meta) };
 }
 
+function parseDoc(raw: string): Parsed {
+  const { syncMeta, writeSeq, ...rest } = JSON.parse(raw) as AppState & { syncMeta?: unknown; writeSeq?: number };
+  const state = repairDuplicateIds(normalize(rest));
+  return { state, meta: migrateMeta(syncMeta, state), seq: Number(writeSeq) || 0 };
+}
+
+/** Why a stored document cannot be loaded (the check `load` applies), or null if it can. */
+export function documentError(raw: string): string | null {
+  try {
+    parseDoc(raw);
+    return null;
+  } catch (e) {
+    return (e as Error).message || String(e);
+  }
+}
+
 export function createDocPersistence(io: DocIO, legacyMeta?: () => unknown): DocPersistence {
   let meta: SyncMeta | null = null;
   let store: Store | null = null;
@@ -121,11 +137,7 @@ export function createDocPersistence(io: DocIO, legacyMeta?: () => unknown): Doc
   let seen = 0;
   let base: AppState = emptyState();
 
-  const parse = (raw: string): Parsed => {
-    const { syncMeta, writeSeq, ...rest } = JSON.parse(raw) as AppState & { syncMeta?: unknown; writeSeq?: number };
-    const state = repairDuplicateIds(normalize(rest));
-    return { state, meta: migrateMeta(syncMeta, state), seq: Number(writeSeq) || 0 };
-  };
+  const parse = parseDoc;
   const exclusive = <T>(fn: () => T): T => (io.exclusive ? io.exclusive(fn) : fn());
 
   /** Write `state` + meta; if someone else wrote meanwhile, merge first. Returns what was written. */
