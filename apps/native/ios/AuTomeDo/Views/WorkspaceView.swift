@@ -18,7 +18,7 @@ struct WorkspaceView: View {
             if let resume = model.view?.resume {
                 Section {
                     HStack(spacing: 12) {
-                        Text("↺").foregroundStyle(Theme.blue)
+                        Image(systemName: "clock.arrow.circlepath").foregroundStyle(Theme.blue)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("上次的快照（\(resume.ago)）").font(.subheadline)
                             Text("从上次停下的地方继续").font(.caption).foregroundStyle(Theme.dim)
@@ -56,7 +56,7 @@ struct WorkspaceView: View {
                     DisclosureGroup(isExpanded: $showDone) {
                         ForEach(finished) { TaskRow(task: $0) }
                     } label: {
-                        Text("☒ 已完成 \(finished.count) 项").font(Theme.mono(13)).foregroundStyle(Theme.dim)
+                        Label("已完成 \(finished.count) 项", systemImage: "checkmark.circle").font(Theme.mono(13)).foregroundStyle(Theme.dim)
                     }
                 }
             }
@@ -86,8 +86,10 @@ struct WorkspaceView: View {
                     }
                     .font(.subheadline)
                 }
-                Button(goal.checkpointDue ? "⚑ Checkpoint 到期" : "做一次 Checkpoint") {
+                Button {
                     Task { await model.run("/checkpoint") }
+                } label: {
+                    Label(goal.checkpointDue ? "Checkpoint 到期" : "做一次 Checkpoint", systemImage: goal.checkpointDue ? "flag.fill" : "flag")
                 }
                 .font(.footnote)
                 .foregroundStyle(goal.checkpointDue ? Theme.yellow : Theme.link)
@@ -126,13 +128,13 @@ struct TaskRow: View {
     let task: ViewModel.TaskItem
     @EnvironmentObject private var model: AppModel
 
-    private var glyph: String {
+    private var symbol: String {
         switch task.status {
-        case "active": return "◼"
-        case "done": return "☒"
-        case "blocked": return "✗"
-        case "skipped": return "⊘"
-        default: return "☐"
+        case "active": return "circle.inset.filled"
+        case "done": return "checkmark.circle.fill"
+        case "blocked": return "exclamationmark.circle"
+        case "skipped": return "minus.circle"
+        default: return "circle"
         }
     }
 
@@ -150,7 +152,7 @@ struct TaskRow: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             if task.sub { Text("↳").foregroundStyle(Theme.faint) }
             Button { Task { await model.act("cycle", task) } } label: {
-                Text(glyph).foregroundStyle(color)
+                Text(Image(systemName: symbol)).font(.body).foregroundStyle(color)
             }
             .buttonStyle(.borderless)
             VStack(alignment: .leading, spacing: 2) {

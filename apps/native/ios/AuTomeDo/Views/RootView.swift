@@ -16,7 +16,7 @@ struct RootView: View {
                 }
             }
             .background(Theme.bg)
-            .safeAreaInset(edge: .bottom, spacing: 0) { BottomBar() }
+            .floatingBottomBar { BottomBar() }
             .toolbar { toolbar }
             .toolbarBackground(Theme.bg, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
@@ -47,7 +47,7 @@ struct RootView: View {
         ToolbarItem(placement: .topBarLeading) {
             Button { model.present(.switcher) } label: {
                 HStack(spacing: 6) {
-                    Text(model.view?.mode == "goal" ? "⏵⏵" : "⏸").foregroundStyle(model.view?.mode == "goal" ? Theme.violet : Theme.teal)
+                    ModeIcon(goal: model.view?.mode == "goal").font(.subheadline)
                     Text(model.view?.ws?.title ?? "AuTomeDo").fontWeight(.semibold).foregroundStyle(Theme.fg).lineLimit(1)
                     Image(systemName: "chevron.down").font(.caption2).foregroundStyle(Theme.dim)
                 }

@@ -12,7 +12,7 @@ extension Line {
     var attributed: AttributedString {
         var out = AttributedString()
         for seg in self {
-            var run = AttributedString(seg.t)
+            var run = AttributedString(seg.t.textGlyphs)
             run.foregroundColor = Color(hexString: seg.c) ?? Theme.fg
             if let bg = Color(hexString: seg.bg) { run.backgroundColor = bg }
             if seg.b == true { run.inlinePresentationIntent = .stronglyEmphasized }

@@ -159,8 +159,8 @@ struct SwitcherSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                section("Plan", kind: "plan", color: Theme.teal, glyph: "⏸")
-                section("Goal", kind: "goal", color: Theme.violet, glyph: "⏵⏵")
+                section("Plan", kind: "plan")
+                section("Goal", kind: "goal")
             }
             .scrollContentBackground(.hidden)
             .navigationTitle("切换")
@@ -178,7 +178,7 @@ struct SwitcherSheet: View {
     }
 
     @ViewBuilder
-    private func section(_ title: String, kind: String, color: Color, glyph: String) -> some View {
+    private func section(_ title: String, kind: String) -> some View {
         let items = (model.view?.workspaces ?? []).filter { $0.kind == kind }
         Section(title) {
             if items.isEmpty {
@@ -187,7 +187,7 @@ struct SwitcherSheet: View {
             ForEach(items) { w in
                 Button { Task { await model.select(w) } } label: {
                     HStack {
-                        Text(glyph).foregroundStyle(color)
+                        ModeIcon(goal: kind == "goal").frame(width: 24)
                         Text(w.title).foregroundStyle(w.status == "active" ? Theme.fg : Theme.dim)
                         if w.status != "active" { Text(w.status).font(.caption2).foregroundStyle(Theme.faint) }
                         Spacer()
