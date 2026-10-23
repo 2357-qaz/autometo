@@ -330,7 +330,7 @@ export function reviewLines(r: Review): Line[] {
     }
     if (r.drift.length > 12) body.push([seg(`  … 更早还有 ${r.drift.length - 12} 条`, C.faint)]);
   }
-  const focus = r.tiers.haiku + r.tiers.sonnet + r.tiers.opus;
+  const focus = TIER_ORDER.reduce((sum, tier) => sum + r.tiers[tier], 0);
   if (focus) {
     const tiers = TIER_ORDER.filter((x) => r.tiers[x]);
     body.push([], [
