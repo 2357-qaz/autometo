@@ -38,6 +38,10 @@ npm install -g ./apps/tui            # 全局安装 automedo 命令
 - 快速记录：打开 `…/?add=买咖啡豆` 即添加任务（可配合 iOS 快捷指令），`?note=` 写一条记录。
 - 提醒：`/sync` 里点「开启提醒」，Checkpoint 到期、阶段逾期、专注超时时会推送通知（iOS 16.4+，需从主屏幕打开）。
 
+### iOS App
+
+和 PWA 是同一套界面，另外有实时活动 / 灵动岛（专注计时）、桌面和锁屏小组件、不依赖服务器的本地通知。没有 Mac 也能装：GitHub Actions 在云端构建 `.ipa`，Windows 上用 Sideloadly 加免费 Apple ID 签名安装。步骤见 [`apps/mobile/README.md`](apps/mobile/README.md)。
+
 ### 多设备同步（可选）
 
 ```bash
@@ -135,6 +139,7 @@ packages/core/    业务核心（不依赖 UI 与存储，供 Web / TUI / Server
   src/diff.ts       Plan Diff：版本 vs 实际执行、首次偏离
   src/compact.ts    规则生成快照
   src/review.ts     规则生成周回顾
+  src/glance.ts     小组件 / 实时活动用的状态快照
   src/hie.ts        Human Inference Engine 计算
   src/commands.ts   斜杠命令；需要表单时发出 Intent，由各客户端呈现
   src/sync.ts       记录级同步：拆分/重组、变更检测、合并
@@ -143,5 +148,6 @@ packages/core/    业务核心（不依赖 UI 与存储，供 Web / TUI / Server
 packages/server/  自托管同步服务器（node:sqlite），可同时托管网页版
 apps/web/         WebUI（React + Vite），localStorage 持久化 + 同步客户端
 apps/tui/         终端版（Ink），~/.automedo 文件持久化 + 同步客户端
+apps/mobile/      iOS App（Capacitor 包装网页版 + SwiftUI 小组件 / 实时活动）
 docs/v1-plan.md   V1（TUI + 后端 + PWA）技术方案
 ```

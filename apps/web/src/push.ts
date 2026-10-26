@@ -1,6 +1,6 @@
 // Browser side of Web Push: subscribe this device with the sync server.
 import type { SyncConfig } from '@automedo/core';
-import { isIOS, isStandalone } from './pwa';
+import { isIOS, isNativeApp, isStandalone } from './pwa';
 
 export type PushState =
   | { kind: 'unsupported'; reason: string }
@@ -31,6 +31,7 @@ async function registration(): Promise<ServiceWorkerRegistration | null> {
 }
 
 export async function pushState(): Promise<PushState> {
+  if (isNativeApp()) return { kind: 'unsupported', reason: 'native' };
   if (isIOS() && !isStandalone()) return { kind: 'unsupported', reason: 'ios-install' };
   if (!('Notification' in window) || !('PushManager' in window)) return { kind: 'unsupported', reason: 'browser' };
   const reg = await registration();
