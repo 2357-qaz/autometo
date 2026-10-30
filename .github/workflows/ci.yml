@@ -34,3 +34,31 @@ jobs:
 
       - name: Build TUI
         run: npm run build -w @automedo/tui
+
+  windows-core-tui:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck Windows targets
+        run: npm run typecheck -w @automedo/core -w @automedo/tui -w @automedo/server
+      - name: Test Windows targets
+        run: npm test -w @automedo/core -w @automedo/tui -w @automedo/server
+      - name: Build TUI
+        run: npm run build -w @automedo/tui
+      - name: Check bundled CLI persistence
+        shell: pwsh
+        run: |
+          $env:AUTOMEDO_HOME = Join-Path $env:RUNNER_TEMP 'automedo-windows-smoke'
+          node apps/tui/dist/cli.js plan 'Windows smoke plan'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node apps/tui/dist/cli.js add 'Windows smoke task'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node apps/tui/dist/cli.js done 1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node -e 'const fs=require("node:fs"),p=require("node:path");const s=JSON.parse(fs.readFileSync(p.join(process.env.AUTOMEDO_HOME,"state.json"),"utf8"));if(s.plans[0]?.title!=="Windows smoke plan" || s.plans[0]?.tasks[0]?.title!=="Windows smoke task" || s.plans[0]?.tasks[0]?.status!=="done") process.exit(1)'
